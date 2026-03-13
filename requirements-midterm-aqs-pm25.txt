@@ -1,0 +1,10 @@
+numpy
+pandas
+tabulate
+requests
+matplotlib
+seaborn
+scipy
+statsmodels
+jupyter
+ipykernel
