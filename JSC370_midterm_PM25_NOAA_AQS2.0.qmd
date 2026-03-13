@@ -1,0 +1,960 @@
+---
+title: "JSC370 Midterm: Daily PM2.5 and Weather Conditions Across Major U.S. Metropolitan Areas in 2024"
+author: "Yukun Wang"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+execute:
+  echo: false
+  warning: false
+  message: false
+jupyter: python3
+---
+
+## Project  Introduction (10 points)
+
+PM2.5, or fine particulate matter with aerodynamic diameter less than or equal to 2.5 micrometers, is an important air pollutant because elevated concentrations are associated with worse respiratory and cardiovascular health outcomes. Understanding how PM2.5 changes across time and place is therefore an important public-health and environmental question.
+
+This project studies **daily PM2.5 patterns across major U.S. metropolitan areas in 2024** by combining daily monitor-level PM2.5 data from the EPA AQS platform with daily weather-related variables from NOAA national center. To satisfy the project requirement of using an API, I use the **NOAA Climate Data Online (CDO) Web Services API v2** to retrieve daily **temperature** and **precipitation** data. I then combine those API-based weather measures with daily **wind**, **barometric pressure**, and **relative humidity/dew point** summary files downloaded from the AQS platform.
+
+The main research question is:
+
+**How are daily PM2.5 levels associated with temperature, precipitation, wind, barometric pressure, and humidity-related conditions across major U.S. metropolitan areas in 2024?**
+
+More specifically, I ask:
+
+1. Which metropolitan areas show higher average daily PM2.5 levels in 2024?
+2. How does PM2.5 vary across months and seasons?
+3. Are higher-PM2.5 days associated with different weather conditions?
+
+The final analysis dataset is built at the **CBSA-day** level. I first aggregate monitor-level observations to the metropolitan-area-by-day level and then merge all weather variables onto the same daily metropolitan panel.
+
+## Methods (20 points)
+
+### Data sources
+
+This project combines five daily datasets:
+
+1. **EPA AQS daily PM2.5** (`daily_88101_2024.csv`) as the main outcome dataset.
+2. **NOAA CDO API** for daily temperature and precipitation.
+3. **EPA AQS daily wind** (`daily_WIND_2024.csv`).
+4. **EPA AQS daily barometric pressure** (`daily_PRESS_2024.csv`).
+5. **EPA AQS daily relative humidity / dew point** (`daily_RH_DP_2024.csv`).
+
+The AQS daily PM2.5 file contains one row per monitor-day observation, including the daily arithmetic mean, daily maximum value, date, and geographic identifiers such as city and CBSA. The weather-related AQS files have a similar structure. Because these files are also reported at the monitor-day level, I aggregate each source to the **CBSA-day** level before merging.
+
+The NOAA API portion is included to meet the requirement that the project use an API. I use the CDO Web Services v2 endpoint with a token in the request header and retrieve daily weather observations from selected stations corresponding to major metropolitan areas.
+
+### Variable construction
+
+For PM2.5, the key outcome variable is the daily **arithmetic mean** concentration. I also create a binary **high PM2.5 day** indicator for exploratory analysis using a threshold of 35 µg/m³ at the CBSA-day level:
+
+- `high_pm25_day = 1` if daily CBSA mean PM2.5 ≥ 35
+- `high_pm25_day = 0` otherwise
+
+For weather, I use:
+
+- `TMAX`: daily maximum temperature from NOAA
+- `TMIN`: daily minimum temperature from NOAA
+- `PRCP`: daily precipitation from NOAA
+- `wind_mean`: daily mean wind speed from AQS daily wind
+- `press_mean`: daily mean barometric pressure from AQS daily pressure
+- `rh_mean`: daily mean relative humidity from AQS daily RH / dewpoint
+
+### Cleaning and preprocessing
+
+The preprocessing workflow is:
+
+1. Read all daily files.
+2. Standardize column names to lower snake_case.
+3. Parse dates.
+4. Remove observations with missing CBSA or missing key outcome values.
+5. Aggregate each source to the **CBSA-day** level.
+6. Merge all sources by `cbsa_name` and `date_local`.
+7. Create month, season, and high-pollution indicators.
+
+### Planned analyses
+
+I use exploratory data analysis and summary statistics to describe temporal and spatial patterns in PM2.5. Specifically, I examine:
+
+- monthly and seasonal PM2.5 patterns
+- mean PM2.5 by CBSA
+- top metropolitan areas by annual average PM2.5
+- relationships between PM2.5 and weather variables using scatterplots and grouped summaries
+
+For the final project, this merged dataset could also support a predictive model for daily PM2.5 or high-PM2.5 days.
+
+To begin the analysis, the primary environmental datasets are loaded into the environment. These comprise four separate daily summary files downloaded directly from the EPA Air Quality System (AQS) platform for the year 2024: the main outcome variable (PM2.5) and three supplementary meteorological variables (wind, barometric pressure, and relative humidity/dew point). These raw .csv files serve as the foundational monitor-level observations for the study.
+
+### Data generation and api retrieval
+
+```{python}
+import pandas as pd
+import numpy as np
+import requests
+import matplotlib.pyplot as plt
+from pathlib import Path
+import time
+
+pd.set_option("display.max_columns", None)
+```
+
+```{python}
+# Put the four CSV files in the same folder as this `.qmd` file, or edit the paths below.
+PM25_FILE = "daily_88101_2024.csv"
+WIND_FILE = "daily_WIND_2024.csv"
+PRESS_FILE = "daily_PRESS_2024.csv"
+RH_FILE = "daily_RH_DP_2024.csv"
+```
+
+```{python}
+# Load AQS daily files
+#| eval: false
+pm25_raw = pd.read_csv(PM25_FILE)
+wind_raw = pd.read_csv(WIND_FILE)
+press_raw = pd.read_csv(PRESS_FILE)
+rh_raw = pd.read_csv(RH_FILE)
+```
+
+To satisfy the project's requirement of utilizing an Application Programming Interface (API) and to obtain essential meteorological covariates, I integrate daily weather data from the NOAA Climate Data Online (CDO) Web Services API v2.
+
+Then I design a suite of custom helper functions is defined to interact robustly with the API endpoints. The noaa_get function manages authentication via a unique request token and handles potential connection errors. 
+
+Because of the NOAA API limits the number of records returned per request, the fetch_noaa_data function is designed with a pagination loop (using the offset parameter) to iteratively pull all available rows for a given station and date range. Additional functions are included to verify station validity and extract available datatypes.
+
+```{python}
+## NOAA CDO API setup
+# Create a NOAA token first and paste it below.
+NOAA_TOKEN = "uPJrTcEPODjkAQsokrDMiBZCqBRybExX"
+NOAA_BASE = "https://www.ncei.noaa.gov/cdo-web/api/v2"
+headers = {"token": NOAA_TOKEN}
+```
+
+```{python}
+## NOAA helper functions
+def noaa_get(endpoint: str, params: dict | None = None, timeout: int = 60) -> dict:
+    """
+    Generic GET helper for NOAA CDO API v2.
+    """
+    if params is None:
+        params = {}
+
+    response = requests.get(
+        f"{NOAA_BASE}/{endpoint.lstrip('/')}",
+        headers=headers,
+        params=params,
+        timeout=timeout,
+    )
+
+    print("URL:", response.url)
+    print("Status:", response.status_code)
+
+    if response.status_code != 200:
+        print("Response preview:", response.text[:1000])
+        response.raise_for_status()
+
+    return response.json()
+
+
+def test_noaa_connection() -> pd.DataFrame:
+    """
+    Quick token + API connection test.
+    """
+    payload = noaa_get("datasets", {"limit": 10})
+    return pd.DataFrame(payload.get("results", []))
+
+
+def fetch_station_info(station_id: str, dataset_id: str = "GHCND") -> pd.DataFrame:
+    """
+    Confirm a station exists in the specified dataset.
+    """
+    payload = noaa_get(
+        "stations",
+        {
+            "datasetid": dataset_id,
+            "stationid": station_id,
+            "limit": 1,
+        }
+    )
+    return pd.DataFrame(payload.get("results", []))
+
+
+def fetch_station_datatypes(
+    station_id: str,
+    dataset_id: str = "GHCND",
+    startdate: str = "2024-01-01",
+    enddate: str = "2024-12-31",
+    limit: int = 1000,
+) -> pd.DataFrame:
+    """
+    List available datatypes for one station in a date range.
+    """
+    payload = noaa_get(
+        "datatypes",
+        {
+            "datasetid": dataset_id,
+            "stationid": station_id,
+            "startdate": startdate,
+            "enddate": enddate,
+            "limit": limit,
+        }
+    )
+    return pd.DataFrame(payload.get("results", []))
+
+
+def fetch_noaa_data(
+    dataset_id: str,
+    station_id: str,
+    datatype_id: str,
+    startdate: str,
+    enddate: str,
+    units: str = "metric",
+    limit: int = 1000,
+    pause: float = 0.3,
+) -> pd.DataFrame:
+    """
+    Pull all pages from NOAA /data endpoint for one station and one datatype.
+    """
+    all_rows = []
+    offset = 1
+
+    while True:
+        payload = noaa_get(
+            "data",
+            {
+                "datasetid": dataset_id,
+                "stationid": station_id,
+                "datatypeid": datatype_id,
+                "startdate": startdate,
+                "enddate": enddate,
+                "units": units,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+
+        rows = payload.get("results", [])
+        if not rows:
+            break
+
+        all_rows.extend(rows)
+
+        metadata = payload.get("metadata", {})
+        resultset = metadata.get("resultset", {})
+        total_count = resultset.get("count", 0)
+
+        offset += limit
+        if offset > total_count:
+            break
+
+        time.sleep(pause)
+
+    df = pd.DataFrame(all_rows)
+    if not df.empty:
+        df["datatype"] = datatype_id
+
+    return df
+
+
+def get_available_datatype_ids(
+    station_id: str,
+    dataset_id: str = "GHCND",
+    startdate: str = "2024-01-01",
+    enddate: str = "2024-12-31",
+) -> list[str]:
+    df_types = fetch_station_datatypes(
+        station_id=station_id,
+        dataset_id=dataset_id,
+        startdate=startdate,
+        enddate=enddate,
+        limit=1000,
+    )
+    if df_types.empty:
+        return []
+    return df_types["id"].tolist()
+
+
+def fetch_noaa_weather_bundle(
+    station_id: str,
+    startdate: str = "2024-01-01",
+    enddate: str = "2024-12-31",
+    dataset_id: str = "GHCND",
+) -> pd.DataFrame:
+    """
+    Pull temperature and precipitation variables separately.
+    Wind is omitted because it is already available from AQS daily files.
+    """
+    target_datatypes = ["TMAX", "TMIN", "PRCP"]
+    available_datatypes = get_available_datatype_ids(
+        station_id=station_id,
+        dataset_id=dataset_id,
+        startdate=startdate,
+        enddate=enddate,
+    )
+
+    datatype_ids = [dt for dt in target_datatypes if dt in available_datatypes]
+    print("Available target datatypes:", datatype_ids)
+
+    frames = []
+    failed = []
+
+    for dt in datatype_ids:
+        print(f"\nFetching {dt} for {station_id} ...")
+        try:
+            df_dt = fetch_noaa_data(
+                dataset_id=dataset_id,
+                station_id=station_id,
+                datatype_id=dt,
+                startdate=startdate,
+                enddate=enddate,
+            )
+            if not df_dt.empty:
+                frames.append(df_dt)
+        except Exception as e:
+            print(f"{dt} failed: {e}")
+            failed.append(dt)
+
+    if failed:
+        print("Skipped datatypes:", failed)
+
+    if frames:
+        return pd.concat(frames, ignore_index=True)
+
+    return pd.DataFrame()
+
+
+def reshape_noaa_weather(df_weather: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert long NOAA weather data into one row per CBSA-date.
+    """
+    if df_weather.empty:
+        return df_weather
+
+    df = df_weather.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+
+    weather_wide = (
+        df.pivot_table(
+            index=["cbsa_name", "date"],
+            columns="datatype",
+            values="value",
+            aggfunc="mean"
+        )
+        .reset_index()
+    )
+
+    weather_wide.columns.name = None
+    weather_wide = weather_wide.rename(columns={"date": "date_local"})
+    return weather_wide
+```
+
+The NOAA CDO API queries data at the individual weather station level rather than by city. To align this weather data with the AQS pollution data, I construct a mapping dictionary (metro_station_map). This dictionary links major U.S. Core Based Statistical Areas (CBSAs)—such as New York, Los Angeles, and Chicago—to the specific Global Historical Climatology Network Daily (GHCND) station ID that best represents the metropolitan area's general weather conditions.
+
+```{python}
+metro_station_map = {
+    "New York-Newark-Jersey City, NY-NJ-PA": "GHCND:USW00094728",
+    "Los Angeles-Long Beach-Anaheim, CA": "GHCND:USW00023174",
+    "Chicago-Naperville-Elgin, IL-IN-WI": "GHCND:USW00094846",
+    "Houston-The Woodlands-Sugar Land, TX": "GHCND:USW00012918",
+    "Phoenix-Mesa-Chandler, AZ": "GHCND:USW00023183",
+    "Phoenix-Mesa-Scottsdale, AZ": "GHCND:USW00023183",
+    "Philadelphia-Camden-Wilmington, PA-NJ-DE-MD": "GHCND:USW00013739",
+    "Pittsburgh, PA": "GHCND:USW00094823",
+    "Las Vegas-Henderson-Paradise, NV": "GHCND:USW00023169",
+    "Salt Lake City, UT": "GHCND:USW00024127",
+    "St. Louis, MO-IL": "GHCND:USW00013994",
+    "San Diego-Carlsbad, CA": "GHCND:USW00023188",
+    "Detroit-Warren-Dearborn, MI": "GHCND:USW00094847",
+    "Boston-Cambridge-Newton, MA-NH": "GHCND:USW00014739",
+    "Cincinnati, OH-KY-IN": "GHCND:USW00093814",
+    "Riverside-San Bernardino-Ontario, CA": "GHCND:USW00023187",
+    "Washington-Arlington-Alexandria, DC-VA-MD-WV": "GHCND:USW00013743",
+    "Minneapolis-St. Paul-Bloomington, MN-WI": "GHCND:USW00014922",
+    "Seattle-Tacoma-Bellevue, WA": "GHCND:USW00024233",
+    "Denver-Aurora-Lakewood, CO": "GHCND:USW00003017",
+    "San Francisco-Oakland-Hayward, CA": "GHCND:USW00023234",
+    "Miami-Fort Lauderdale-West Palm Beach, FL": "GHCND:USW00012839",
+    "Sacramento--Roseville--Arden-Arcade, CA": "GHCND:USW00023271",
+    "Cleveland-Elyria, OH": "GHCND:USW00014820",
+    "Dallas-Fort Worth-Arlington, TX": "GHCND:USW00003927",
+    "Louisville/Jefferson County, KY-IN": "GHCND:USW00093821",
+    "Knoxville, TN": "GHCND:USW00013891",
+    "Albuquerque, NM": "GHCND:USW00023050",
+    "Providence-Warwick, RI-MA": "GHCND:USW00014765",
+    "Fresno, CA": "GHCND:USW00023157",
+    "Indianapolis-Carmel-Anderson, IN": "GHCND:USW00093819",
+    "Kansas City, MO-KS": "GHCND:USW00003947",
+    "San Antonio-New Braunfels, TX": "GHCND:USW00012921",
+    "Atlanta-Sandy Springs-Roswell, GA": "GHCND:USW00013874",
+    "Charlotte-Concord-Gastonia, NC-SC": "GHCND:USW00013881",
+    "Nashville-Davidson--Murfreesboro--Franklin, TN": "GHCND:USW00013897",
+}
+```
+
+With the API helper functions and the CBSA-to-station mapping established, the data retrieval process is executed. The code iterates through the predefined dictionary of major metropolitan areas, calling the fetch_noaa_weather_bundle function for each station. Specifically, it requests daily maximum temperature (TMAX), minimum temperature (TMIN), and precipitation (PRCP) for the entire year of 2024. The successfully retrieved records are appended into a single, long-format DataFrame (noaa_weather_raw), which is later reshaped and merged with the EPA AQS datasets.
+
+```{python}
+#| eval: false
+# Uncomment after adding your token and confirming station IDs.
+weather_frames = []
+
+for metro, station_id in metro_station_map.items():
+    df_station_weather = fetch_noaa_weather_bundle(
+        station_id=station_id,
+        startdate="2024-01-01",
+        enddate="2024-12-31",
+        dataset_id="GHCND",
+    )
+
+    if not df_station_weather.empty:
+        df_station_weather["cbsa_name"] = metro
+        weather_frames.append(df_station_weather)
+
+noaa_weather_raw = pd.concat(weather_frames, ignore_index=True) if weather_frames else pd.DataFrame()
+noaa_weather_raw.head()
+```
+
+### Data cleaning and wrangling
+
+#### Standardize column names
+To ensure consistency across the multiple EPA AQS datasets, the first step in the data wrangling process is to standardize all column names. The clean_columns function converts all headers to lowercase, strips trailing whitespaces, and replaces spaces and special characters with underscores (snake_case format). This step minimizes referencing errors during the merging phase.
+
+```{python}
+#| eval: false
+def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(r"[^a-z0-9]+", "_", regex=True)
+        .str.strip("_")
+    )
+    return df
+
+pm25 = clean_columns(pm25_raw)
+wind = clean_columns(wind_raw)
+press = clean_columns(press_raw)
+rh = clean_columns(rh_raw)
+
+pm25.head()
+```
+
+#### Parse dates
+
+Next, the date columns across all four datasets (PM2.5, Wind, Barometric Pressure, and Relative Humidity) are converted from string format to pandas datetime objects. The dt.normalize() function is applied to strip any inconsistent timestamp information, ensuring that all dates are standardized at midnight for accurate daily merging.
+
+```{python}
+#| eval: false
+for df in [pm25, wind, press, rh]:
+    df["date_local"] = pd.to_datetime(df["date_local"]).dt.normalize()
+```
+
+#### Build location-day datasets
+
+A key challenge with the AQS datasets is the presence of multiple Parameter Occurrence Codes (POC) at a single monitoring site on the same day. These represent multiple instruments operating simultaneously. To handle this and create a clean unit of observation, I construct a unique location-day identifier (location_day_keys) using state_code, county_code, site_num, and date_local.
+
+The aggregate_to_location_day function is then applied to group the data by these unique keys. If a site has multiple monitors, the function calculates the mean of the daily arithmetic means, collapses the geographic identifiers, and returns a dataset strictly at the site-day level.
+
+```{python}
+#| eval: false
+location_day_keys = ["state_code", "county_code", "site_num", "date_local"]
+geo_cols = [
+    "latitude", "longitude", "state_name", "county_name",
+    "city_name", "cbsa_name"
+]
+
+
+def first_non_missing(series: pd.Series):
+    non_missing = series.dropna()
+    return non_missing.iloc[0] if not non_missing.empty else pd.NA
+
+
+def aggregate_to_location_day(
+    df: pd.DataFrame,
+    value_map: dict[str, str],
+    include_geo: bool = False
+) -> pd.DataFrame:
+    """Collapse duplicate POC rows to one row per location-day."""
+    required_cols = location_day_keys + list(value_map.keys())
+    if include_geo:
+        required_cols += ["poc"] + geo_cols
+
+    available_cols = [col for col in required_cols if col in df.columns]
+    out = df[available_cols].copy().rename(columns=value_map)
+
+    agg_map = {}
+    if include_geo:
+        agg_map["poc"] = first_non_missing
+        for col in geo_cols:
+            if col in out.columns:
+                agg_map[col] = first_non_missing
+
+    for renamed_col in value_map.values():
+        if renamed_col in out.columns:
+            agg_map[renamed_col] = "max" if renamed_col == "pm25_max" else "mean"
+
+    return out.groupby(location_day_keys, as_index=False).agg(agg_map)
+
+
+pm25_local_day = aggregate_to_location_day(
+    pm25.dropna(subset=["date_local", "arithmetic_mean"]),
+    value_map={
+        "arithmetic_mean": "arithmetic_mean",
+        "1st_max_value": "pm25_max",
+        "aqi": "aqi",
+    },
+    include_geo=True,
+)
+
+wind_local_day = aggregate_to_location_day(
+    wind.dropna(subset=["date_local", "arithmetic_mean"]),
+    value_map={"arithmetic_mean": "wind_mean"},
+)
+
+press_local_day = aggregate_to_location_day(
+    press.dropna(subset=["date_local", "arithmetic_mean"]),
+    value_map={"arithmetic_mean": "press_mean"},
+)
+
+rh_value_map = {"arithmetic_mean": "rh_mean"}
+if "1st_max_value" in rh.columns:
+    rh_value_map["1st_max_value"] = "dew_point_max"
+
+rh_local_day = aggregate_to_location_day(
+    rh.dropna(subset=["date_local", "arithmetic_mean"]),
+    value_map=rh_value_map,
+)
+
+pm25_local_day.head()
+```
+
+#### Merge AQS supplemental data and NOAA weather
+
+With all datasets aggregated to the site-day level, I conduct a sequence of merges to build the final comprehensive dataset. First, the AQS meteorological variables (wind, pressure, humidity) are joined to the main PM2.5 dataset using the location_day_keys via a one-to-one left merge.
+
+Subsequently, the NOAA API weather dataset, which is constructed at the broader Core Based Statistical Area (CBSA) level, is integrated. To achieve this, I reshape the NOAA data into a wide format (weather_wide) with one row per CBSA-day. This dataset is then merged into the site-level AQS panel using a many-to-one left join based on cbsa_name and date_local. Finally, new categorical variables such as month, season, and a binary indicator for high_pm25_day (≥ 35 µg/m³) are generated to facilitate exploratory data analysis.
+
+```{python}
+#| eval: false
+# Always prefer rebuilding weather_wide from the latest NOAA raw table
+if "noaa_weather_raw" in globals() and not noaa_weather_raw.empty:
+    weather_wide = reshape_noaa_weather(noaa_weather_raw.copy())
+    weather_wide = clean_columns(weather_wide.copy())
+elif "noaa_weather_wide" in globals() and not noaa_weather_wide.empty:
+    weather_wide = clean_columns(noaa_weather_wide.copy())
+elif "weather_wide" in globals() and not weather_wide.empty:
+    weather_wide = clean_columns(weather_wide.copy())
+else:
+    weather_wide = pd.DataFrame(columns=["cbsa_name", "date_local", "PRCP", "TMAX", "TMIN"])
+
+# If reshape created `date`, rename it
+if "date" in weather_wide.columns and "date_local" not in weather_wide.columns:
+    weather_wide = weather_wide.rename(columns={"date": "date_local"})
+
+# Standardize merge keys on BOTH sides
+pm25_local_day["cbsa_name"] = pm25_local_day["cbsa_name"].astype(str).str.strip()
+pm25_local_day["date_local"] = pd.to_datetime(pm25_local_day["date_local"]).dt.normalize()
+
+if not weather_wide.empty:
+    weather_wide["cbsa_name"] = weather_wide["cbsa_name"].astype(str).str.strip()
+    weather_wide["date_local"] = pd.to_datetime(weather_wide["date_local"]).dt.normalize()
+
+    weather_wide = weather_wide.rename(
+        columns={"prcp": "PRCP", "tmax": "TMAX", "tmin": "TMIN"}
+    )
+
+    weather_keep_cols = [
+        col for col in ["cbsa_name", "date_local", "PRCP", "TMAX", "TMIN"]
+        if col in weather_wide.columns
+    ]
+
+    weather_wide = weather_wide[weather_keep_cols].dropna(subset=["cbsa_name", "date_local"])
+
+    # Aggregate again defensively in case duplicates exist
+    weather_wide = (
+        weather_wide
+        .groupby(["cbsa_name", "date_local"], as_index=False)
+        .agg({
+            "PRCP": "mean" if "PRCP" in weather_wide.columns else "first",
+            "TMAX": "mean" if "TMAX" in weather_wide.columns else "first",
+            "TMIN": "mean" if "TMIN" in weather_wide.columns else "first",
+        })
+    )
+
+print("weather_wide shape used for merge:", weather_wide.shape)
+print("weather_wide unique cbsa:", weather_wide["cbsa_name"].nunique() if not weather_wide.empty else 0)
+print(sorted(weather_wide["cbsa_name"].dropna().unique())[:50] if not weather_wide.empty else [])
+
+merged_local_day = (
+    pm25_local_day
+    .merge(wind_local_day, on=location_day_keys, how="left", validate="one_to_one")
+    .merge(press_local_day, on=location_day_keys, how="left", validate="one_to_one")
+    .merge(rh_local_day, on=location_day_keys, how="left", validate="one_to_one")
+    .merge(weather_wide, on=["cbsa_name", "date_local"], how="left", validate="many_to_one")
+)
+
+merged_local_day["month"] = merged_local_day["date_local"].dt.month
+merged_local_day["year"] = merged_local_day["date_local"].dt.year
+
+season_map = {
+    12: "Winter", 1: "Winter", 2: "Winter",
+    3: "Spring", 4: "Spring", 5: "Spring",
+    6: "Summer", 7: "Summer", 8: "Summer",
+    9: "Fall", 10: "Fall", 11: "Fall"
+}
+merged_local_day["season"] = merged_local_day["month"].map(season_map)
+merged_local_day["high_pm25_day"] = (merged_local_day["arithmetic_mean"] >= 35).astype(int)
+
+final_col_order = [
+    "state_code", "county_code", "site_num", "poc", "date_local",
+    "latitude", "longitude", "state_name", "county_name", "city_name", "cbsa_name",
+    "arithmetic_mean", "pm25_max", "aqi",
+    "wind_mean", "press_mean", "rh_mean", "dew_point_max",
+    "PRCP", "TMAX", "TMIN",
+    "month", "year", "season", "high_pm25_day"
+]
+merged_local_day = merged_local_day[[col for col in final_col_order if col in merged_local_day.columns]]
+
+merged = merged_local_day.copy()
+merged["pm25_mean"] = merged["arithmetic_mean"]
+
+print("merged_local_day shape:", merged_local_day.shape)
+print(merged_local_day[["PRCP", "TMAX", "TMIN"]].isnull().sum())
+merged_local_day.head()
+```
+
+The final preprocessing step involves handling missing values to prepare the dataset for complete-case analysis. Because the NOAA API data was pulled exclusively for specific major metropolitan areas, AQS monitors located outside these CBSAs lack temperature and precipitation data. Furthermore, some monitors may have missed recording certain meteorological parameters on given days. Therefore, I subset the data by removing any rows containing missing values across the core variables, yielding the final analytical dataset (merged_local_day).
+
+```{python}
+#| eval: false
+# Keep a raw merged copy, then remove every row that contains any missing value.
+merged_local_day_raw = merged_local_day.copy()
+merged_local_day = merged_local_day.dropna().reset_index(drop=True)
+print("Rows before dropna:", len(merged_local_day_raw))
+print("Rows after dropna:", len(merged_local_day))
+print(merged_local_day.isnull().sum())
+merged = merged_local_day.copy()
+merged_local_day.describe(include='all')
+merged_local_day.to_csv("pm25_weather_local_2024_2.0.csv", index=False)
+```
+
+## Preliminary Results (30 points)
+
+### Basic dataset summary
+
+After we merged the dataset from the two different sourse, we notice there is a POC value indicate for the different measure methods and rules for PM2.5, under this condition, we will do the filter again and only remains the data with the POC value as 1. Then we can do a small summary for the data: 
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: tbl-summary
+#| tbl-cap: "Table 1: Summary Statistics of PM2.5 and Weather Variables (Primary Monitors Only)"
+from IPython.display import Markdown
+df = pd.read_csv("pm25_weather_local_2024_2.0.csv")
+# Filter for Primary Monitors ONLY using your dataframe 'df'
+df_clean = df[df['poc'] == 1].copy()
+# Select key variables using the EXACT column names from your dataset
+vars_of_interest = ['arithmetic_mean', 'TMAX', 'PRCP', 'wind_mean', 'press_mean', 'rh_mean']
+summary_stats = df_clean[vars_of_interest].describe().T[['count', 'mean', 'std', 'min', '50%', 'max']]
+
+# Rename index for better readability in the final report
+summary_stats.index = ['PM2.5 Mean (µg/m³)', 'Max Temp (°C)', 'Precipitation (mm)', 
+                       'Wind Speed Mean', 'Barometric Pressure (mb)', 'Relative Humidity (%)']
+# Render as Markdown for a beautifully formatted HTML table
+summary_stats.round(2)
+```
+
+The summary statistics for the 5,798 site-day observations provide a foundational understanding of the 2024 dataset:
+- PM2.5 Concentrations: The average daily PM2.5 concentration (arithmetic_mean) is 9.76 µg/m³. However, the mean is higher than the median (8.53 µg/m³), indicating a right-skewed distribution caused by extreme pollution events, with a recorded maximum of 130.94 µg/m³.
+- Temperature Ranges: Maximum temperatures (TMAX) average 20.78°C, but the dataset captures significant extremes ranging from -16°C to 47.8°C. This wide variation ensures that the study accounts for diverse seasonal impacts on air quality.
+- Precipitation and Humidity: Precipitation is highly skewed, with a median of 0.0 mm, indicating that most days in the sample are dry. The average relative humidity of 64.35% suggests moderate atmospheric moisture levels across the metropolitan areas studied.
+- Atmospheric Pressure: Barometric pressure remains stable with a mean of 991.62 mb. The minimum of 823.04 mb correctly reflects data from high-altitude monitoring sites, adding to the geographic diversity of the report.
+
+### Temporal Patterns: Monthly and Seasonal PM2.5
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-monthly
+#| fig-cap: "Figure 1: Monthly Distribution of Daily PM2.5 Concentrations in 2024"
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+plt.figure(figsize=(10, 5))
+sns.boxplot(data=df_clean, x='month', y='arithmetic_mean', palette='viridis')
+plt.title('Monthly Distribution of PM2.5 Concentrations', fontsize=14)
+plt.xlabel('Month', fontsize=12)
+plt.ylabel('PM2.5 Mean (µg/m³)', fontsize=12)
+plt.tight_layout()
+plt.show()
+```
+
+The figure reveals a distinct bimodal seasonal pattern in PM2.5 concentrations across 2024. The highest median levels and greatest atmospheric variability occur during the Summer months (July and August) and Winter (January). Notably, July displays the most significant outliers, with daily concentrations spiking above 120 µg/m³. These spikes are often characteristic of exceptional regional events, such as wildfire smoke transport, which significantly skew the distribution upward. In contrast, Spring (April and May) serves as the cleanest period of the year, exhibiting both the lowest median concentrations (~7.75 µg/m³) and the most stable, narrowest interquartile ranges. This seasonal cycle highlights the impact of varying temperature-driven chemical reactions and stagnant winter air masses on urban air quality.
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: tbl-seasonal
+#| tbl-cap: "Table 2: Seasonal Summary of PM2.5 Concentrations"
+
+seasonal_summary = df_clean.groupby('season')['arithmetic_mean'].agg(['count', 'mean', 'std', 'max']).round(2)
+Markdown(seasonal_summary.to_markdown())
+```
+
+The seasonal summary table quantifies the temporal fluctuations of PM2.5 concentrations throughout 2024:
+- Peak Pollution Periods: Summer and Winter emerge as the seasons with the highest average concentrations, recording means of 10.67 µg/m³ and 10.62 µg/m³, respectively.
+- Extreme Events: Summer recorded the most severe pollution event of the year, with an absolute maximum of 130.94 µg/m³, nearly triple the maximum observed in Spring.
+- Variability: Winter exhibits the highest standard deviation (8.63), indicating that air quality during this period is the most volatile, likely due to intermittent stagnation and temperature inversion events.
+- Cleanest Season: Spring is established as the cleanest period of the year, characterized by the lowest average concentration (7.75 µg/m³) and the lowest variability (std of 4.72).
+
+
+### Spatial Patterns: Top Metropolitan Areas
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-top-cbsa
+#| fig-cap: "Figure 2: Top 15 Metropolitan Areas by Average Daily PM2.5"
+
+cbsa_mean = df_clean.groupby('cbsa_name')['arithmetic_mean'].mean().sort_values(ascending=False).head(15).reset_index()
+
+plt.figure(figsize=(8, 6))
+sns.barplot(data=cbsa_mean, x='arithmetic_mean', y='cbsa_name', palette='Reds_r')
+plt.title('Top 15 CBSAs by Average PM2.5', fontsize=14)
+plt.xlabel('Average PM2.5 (µg/m³)', fontsize=12)
+plt.ylabel('')
+plt.tight_layout()
+plt.show()
+```
+
+This bar plot highlights significant geographic disparities in air quality across major U.S. metropolitan areas in 2024.
+- Highest Burden: Phoenix-Mesa-Chandler, AZ ranks as the most polluted area in this sample, with an average daily PM2.5 concentration exceeding 16 µg/m³, followed closely by San Antonio-New Braunfels, TX.
+- Regional Clusters: Several Texas metropolitan areas (San Antonio and Houston) and Southwestern regions (Phoenix) dominate the top of the list, suggesting regional environmental factors such as high temperatures and specific industrial or transit-related emission profiles.
+- Comparison to National Average: All fifteen areas shown exceed the overall dataset mean of 9.76 µg/m³. Even the lowest-ranking city in this top group, Louisville/Jefferson County, KY-IN, maintains an average of approximately 11 µg/m³, indicating a sustained pollution burden compared to the rest of the country.
+- Consistency with Results: The high ranking of these predominantly warm-climate cities aligns with the previous findings that linked elevated PM2.5 levels to higher maximum temperatures (TMAX).
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-spatial-map
+#| fig-cap: "Figure 3: Spatial Distribution of Annual Average PM2.5 across U.S. Monitoring Sites"
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+for col in ['longitude', 'latitude', 'arithmetic_mean']:
+    if col in df_clean.columns:
+        df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+
+site_means = df_clean.groupby(['longitude', 'latitude'])['arithmetic_mean'].mean().reset_index()
+
+plt.figure(figsize=(12, 7))
+
+scatter = plt.scatter(x=site_means['longitude'], y=site_means['latitude'], 
+                      c=site_means['arithmetic_mean'], cmap='YlOrRd', 
+                      s=70, alpha=0.8, edgecolor='black', linewidth=0.5)
+
+cbar = plt.colorbar(scatter)
+cbar.set_label('Annual Average PM2.5 (µg/m³)', fontsize=12)
+plt.title('Spatial Distribution of Annual Average PM2.5 (2024)', fontsize=15)
+plt.xlabel('Longitude', fontsize=12)
+plt.ylabel('Latitude', fontsize=12)
+
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
+```
+
+The scatter plot shoes a detailed Spatial Analysis (Verification with Data)
+
+- Extreme Regional Hotspots: The data confirms that Phoenix-Mesa-Chandler, AZ (16.33 µg/m³) and San Antonio-New Braunfels, TX (13.56 µg/m³) are the primary drivers of the high-pollution cluster. Their values significantly exceed the national sample average of 9.76 µg/m³, which correlates with the previously observed trend where higher TMAX (Maximum Temperature) environments coincide with peak PM2.5.
+
+- Geographic Consistency: The inclusion of multiple Texas cities (San Antonio and Houston) and Southwestern hubs (Phoenix) in the top tier indicates that these high concentrations are not isolated incidents but represent regional atmospheric patterns. These areas often face a combination of high solar radiation (promoting secondary aerosol formation) and specific industrial/transportation densities.
+
+- Validation of Statistical Skewness: The fact that the top 15 cities all have means ranging from 11.23 µg/m³ to 16.33 µg/m³—all well above the median—further validates that the "right-skew" mentioned in the summary statistics is largely driven by these specific high-burden metropolitan corridors.
+
+### Weather and PM2.5 Relationships
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-tmax
+#| fig-cap: "Relationship between Daily Maximum Temperature and PM2.5"
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+
+# Data setup
+df_clean['TMAX'] = pd.to_numeric(df_clean['TMAX'], errors='coerce')
+df_clean['arithmetic_mean'] = pd.to_numeric(df_clean['arithmetic_mean'], errors='coerce')
+
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=df_clean, x='TMAX', y='arithmetic_mean', alpha=0.3, color='coral')
+plt.title('Max Temperature vs PM2.5')
+plt.xlabel('Max Temperature (°C)')
+plt.ylabel('PM2.5 Mean (µg/m³)')
+plt.show()
+```
+
+The scatterplot reveals a significant non-linear relationship between maximum daily temperature (TMAX) and PM2.5 concentrations. While the majority of observations cluster at lower concentrations across all temperatures, the most severe pollution spikes (above 60 µg/m³) occur exclusively within the 15°C to 40°C range. This suggests that moderate-to-high temperatures are a key environmental prerequisite for extreme PM2.5 events in this dataset. These spikes are likely driven by enhanced secondary aerosol formation through photochemical reactions or seasonal events like summer wildfires, whereas extreme cold or extreme heat (>45°C) appears to limit the potential for such high-concentration peaks.
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-tmin
+#| fig-cap: "Relationship between Daily Minimum Temperature and PM2.5"
+
+df_clean['TMIN'] = pd.to_numeric(df_clean['TMIN'], errors='coerce')
+
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=df_clean, x='TMIN', y='arithmetic_mean', alpha=0.3, color='orange')
+plt.title('Min Temperature vs PM2.5')
+plt.xlabel('Min Temperature (°C)')
+plt.ylabel('PM2.5 Mean (µg/m³)')
+plt.show()
+
+```
+
+The relationship between daily minimum temperature (TMIN) and PM2.5 concentrations reveals significant seasonal clustering. Most extreme pollution spikes (exceeding 60 µg/m³) are observed when the daily minimum temperature falls between 10°C and 25°C, which aligns with the previously identified high-pollution periods in summer and early autumn. Interestingly, while the data shows a broad distribution, very low minimum temperatures (below 0°C) exhibit relatively fewer extreme outliers compared to the moderate temperature range. This suggests that in the sampled metropolitan areas, the most hazardous air quality events are more closely tied to warm-season stagnant air masses or specific regional events (like wildfire smoke) rather than cold-weather temperature inversions alone.
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-wind
+#| fig-cap: "Relationship between Wind Direction and PM2.5"
+
+df_clean['wind_mean'] = pd.to_numeric(df_clean['wind_mean'], errors='coerce')
+
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=df_clean, x='wind_mean', y='arithmetic_mean', alpha=0.3, color='skyblue')
+plt.title('Wind Direction vs PM2.5')
+plt.xlabel('Wind Direction (Degrees)')
+plt.ylabel('PM2.5 Mean (µg/m³)')
+plt.show()
+```
+
+The relationship between wind direction (measured in degrees from 0° to 360°) and PM2.5 concentrations shows a fairly uniform distribution of observations across all compass headings. However, the most extreme PM2.5 spikes appear slightly more concentrated within specific directional corridors (e.g., around 150°–250°, or South/Southwest). While wind direction does not have a simple linear correlation with pollution levels, this clustering suggests that certain wind patterns may transport pollutants from major upwind emission sources—such as industrial zones or heavy traffic corridors—toward the monitoring stations. This finding highlights the importance of local geography and the directional positioning of pollution sources in urban air quality modeling.
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-humidity
+#| fig-cap: "Relationship between Relative Humidity and PM2.5"
+
+df_clean['rh_mean'] = pd.to_numeric(df_clean['rh_mean'], errors='coerce')
+
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=df_clean, x='rh_mean', y='arithmetic_mean', alpha=0.3, color='lightgreen')
+plt.title('Relative Humidity vs PM2.5')
+plt.xlabel('Mean Relative Humidity (%)')
+plt.ylabel('PM2.5 Mean (µg/m³)')
+plt.show()
+
+```
+
+The scatterplot confirms a significant, non-linear relationship between relative humidity (RH) and PM2.5 concentrations. There should be some physical properties we can relate to under this condition:
+
+- Hygroscopic Growth Effect: A dense cluster of high PM2.5 observations is evident in the 40% to 80% RH range. This is a direct physical consequence of hygroscopic growth, where existing fine particulate matter absorbs atmospheric water vapor, increasing its mass and size, and thus raising the recorded concentration.
+
+- The Upper Threshold: Interestingly, as humidity approaches saturation (90%–100%), the concentration of PM2.5 tends to decrease. This is likely due to the fact that near-100% humidity is often associated with fog formation or precipitation events (the washout effect), which removes particles from the air.
+
+- Limiting Factors: The scarcity of extreme PM2.5 spikes at very low humidity (<20%) suggests that moisture is often a necessary "facilitator" for reaching high aerosol mass concentrations in many urban environments.
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-prcp
+#| fig-cap: "The Washout Effect: Precipitation vs PM2.5"
+
+df_clean['PRCP'] = pd.to_numeric(df_clean['PRCP'], errors='coerce')
+
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=df_clean, x='PRCP', y='arithmetic_mean', alpha=0.3, color='blue')
+plt.title('Precipitation vs PM2.5')
+plt.xlabel('Precipitation (mm)')
+plt.ylabel('PM2.5 Mean (µg/m³)')
+plt.show()
+
+```
+
+The relationship between daily precipitation (PRCP) and PM2.5 concentrations exhibits a textbook example of the "washout effect" (or wet scavenging). The scatterplot follows a sharp L-shaped distribution, we will analysis it through the dry wet conditions:
+
+- Dry Conditions: When precipitation is near zero, PM2.5 concentrations vary widely, capturing everything from clean-air days to extreme pollution spikes exceeding 120 µg/m³.
+
+- Wet Conditions: As soon as precipitation becomes significant (even >10 mm), PM2.5 levels are immediately suppressed and remain consistently below 40 µg/m³.
+
+This confirms that rainfall acts as a primary natural cleanser of the atmosphere, physically removing fine particulate matter through wet deposition. The lack of high-pollution outliers during rainy periods highlights that dry, stagnant weather is a mandatory prerequisite for hazardous PM2.5 accumulation in these urban areas. Also the rainfall have the direct connection with the relative humidity above.
+
+```{python}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: fig-pressure
+#| fig-cap: "Relationship between Barometric Pressure and PM2.5"
+
+df_clean['press_mean'] = pd.to_numeric(df_clean['press_mean'], errors='coerce')
+
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=df_clean, x='press_mean', y='arithmetic_mean', alpha=0.3, color='purple')
+plt.title('Barometric Pressure vs PM2.5')
+plt.xlabel('Barometric Pressure (mb)')
+plt.ylabel('PM2.5 Mean (µg/m³)')
+plt.show()
+```
+
+The scatterplot reveals that PM2.5 concentrations are highly sensitive to variations in barometric pressure.
+
+- High-Pressure Clustering: The most extreme PM2.5 spikes (exceeding 80 µg/m³) occur predominantly within the 1010 mb to 1030 mb range. In meteorology, high-pressure systems are often associated with sinking air and "stagnant" conditions. This creates a stable atmospheric boundary layer that acts as a lid, trapping urban pollutants near the surface and preventing them from dispersing.
+
+- Low-Pressure Clearance: Conversely, lower barometric pressure levels (often linked to stormy weather, wind, and instability) generally correspond to lower PM2.5 levels, as these conditions promote atmospheric mixing and pollutant removal.
+
+- Geographic Insights: The smaller cluster of data points located near 820–900 mb represents monitoring sites at higher altitudes (e.g., Denver or other mountain-region cities). The fact that PM2.5 levels remain relatively low in these low-pressure (high-altitude) environments further underscores that severe pollution is primarily a phenomenon of stable, high-pressure air masses at lower elevations.
+
+## Summary (15 points)
+
+### Answer to the proposed research questions
+
+Through the exploratory analysis of the 2024 CBSA-day level dataset, we provide the following answers to our initial research questions:
+
+- Q1 for the Metropolitan Hotspots: The analysis identifies Phoenix-Mesa-Chandler, AZ, and several Texas metropolitan areas (e.g., San Antonio and Houston) as having the highest average daily PM2.5 levels in 2024. These areas consistently exceed the national average, often surpassing 13 µg/m³.
+
+- Q2 for the Temporal Patterns: PM2.5 levels exhibit a distinct bimodal seasonal trend. Peak concentrations occur in July/August (Summer) and January (Winter), while Spring (April-May) is identified as the cleanest period of the year with the lowest variability.
+
+- Q3 for the Weather Associations: Higher-PM2.5 days are strongly associated with specific meteorological "windows": stagnant high-pressure systems (1010–1030 mb), dry conditions (the absence of the washout effect), and moderate-to-high temperatures (15°C–40°C). The data confirms that weather acts as a critical gatekeeper for pollution accumulation.
+
+The EDA reveals that PM2.5 concentrations are governed by non-random temporal, spatial, and meteorological patterns. Most notably, the relationship between weather variables (like humidity and precipitation) and air quality is predominantly non-linear. This complexity provides a strong empirical justification for utilizing advanced machine learning algorithms rather than simple linear regressions for the final forecasting phase.
+
+### Final Project Objectives
+
+The final project will transition from descriptive analysis to predictive modeling, focusing on a two-pronged Machine Learning strategy:
+
+- Regression Modeling: To predict the precise daily arithmetic_mean of PM2.5. This will be used to understand the exact sensitivity of air quality to incremental changes in weather parameters.
+
+- Classification Modeling: To categorize air quality into discrete risk levels (e.g., based on AQI thresholds: Good, Moderate, Unhealthy). This approach is more aligned with public health decision-making, where the goal is to trigger alerts rather than predicting exact concentrations.
+
+### Implementation Plan
+
+To achieve these objectives, the following steps will be executed:
+
+Step 1: Feature Engineering & Pre-processing: Handle the cyclical nature of wind direction using trigonometric transformations (sine/cosine). Also integrate temporal features (month, day of week) and regional indicators to capture localized trends.
+
+Step 2: Model Development & Selection: We will evaluate non-linear models such as Random Forest, XGBoost, or Support Vector Machines (SVM) to handle the complex interactions identified in the scatterplots. For Classification, we will implement multi-class classifiers to predict AQI categories.
+
+Step 3: Interactive Visualizations: Develop an interactive dashboard (using Plotly or Leaflet) that allows users to explore PM2.5 levels across the U.S. in real-time.
+
+Step 4: Web Development: The entire analysis and the trained models will be hosted on a dedicated website (via Quarto Pub or GitHub Pages), providing an accessible platform for stakeholders to interact with our predictive tools.
