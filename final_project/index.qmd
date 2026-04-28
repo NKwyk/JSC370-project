@@ -53,7 +53,7 @@ display(Markdown(summary.to_markdown(index=False)))
 - [Interactive visualizations](visualizations.html): three Plotly figures for the Homework 5 requirement, including a monitor map, monthly/seasonal PM2.5 distributions, and a weather relationship explorer.
 - [Written report](report.html): the full reproducible report with hidden code, cleaned tables, model comparisons, and interpretation.
 - [Download the report](report.pdf): PDF version of the written report.
-- [GitHub repository](https://github.com/NKwyk/JSC370-project): source files, data, and website code.
+- [GitHub repository](https://github.com/NKwyk/JSC370-project): source files, data, and website code(The final project code is under the folder final project).
 
 ## Main Findings
 

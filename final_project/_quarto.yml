@@ -3,7 +3,7 @@ project:
   output-dir: "."
 
 website:
-  title: "PM2.5 and Weather"
+  title: "PM2.5 Prediction"
   navbar:
     left:
       - text: "Home"

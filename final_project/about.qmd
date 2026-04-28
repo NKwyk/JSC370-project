@@ -35,6 +35,8 @@ All source files are in the `final_project` directory:
 
 The project repository is available here: [https://github.com/NKwyk/JSC370-project](https://github.com/NKwyk/JSC370-project).
 
+The final project repository only is available here: [https://github.com/NKwyk/JSC370-project/tree/main/final_project](https://github.com/NKwyk/JSC370-project/tree/main/final_project).
+
 ## Rendering
 
 To reproduce the site locally, run this command from the `final_project` directory:
