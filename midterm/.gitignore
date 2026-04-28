@@ -1,0 +1,4 @@
+*.csv
+.quarto/
+.DS_Store
+__pycache__/
