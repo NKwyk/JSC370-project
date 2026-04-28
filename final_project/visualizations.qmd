@@ -1,0 +1,245 @@
+---
+title: "Interactive Visualizations"
+author: "Yukun Wang"
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{python}
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+df = pd.read_csv("pm25_weather_local_2024_2.0.csv", parse_dates=["date_local"])
+df["high_pm25_day"] = (df["arithmetic_mean"] > 35).astype(int)
+df["date_label"] = df["date_local"].dt.strftime("%Y-%m-%d")
+df["month_name"] = df["date_local"].dt.month_name().str.slice(stop=3)
+
+month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+season_order = ["Winter", "Spring", "Summer", "Fall"]
+monitor_keys = ["state_code", "county_code", "site_num", "poc"]
+
+monitor_summary = (
+    df.groupby(monitor_keys, as_index=False)
+    .agg(
+        latitude=("latitude", "first"),
+        longitude=("longitude", "first"),
+        cbsa_name=("cbsa_name", "first"),
+        city_name=("city_name", "first"),
+        state_name=("state_name", "first"),
+        monitor_days=("arithmetic_mean", "size"),
+        mean_pm25=("arithmetic_mean", "mean"),
+        max_pm25=("arithmetic_mean", "max"),
+        high_pm25_days=("high_pm25_day", "sum")
+    )
+)
+monitor_summary["high_day_rate"] = (
+    monitor_summary["high_pm25_days"] / monitor_summary["monitor_days"] * 100
+)
+monitor_summary["monitor_label"] = (
+    monitor_summary["city_name"].astype(str)
+    + ", "
+    + monitor_summary["state_name"].astype(str)
+    + " | Site "
+    + monitor_summary["site_num"].astype(str)
+    + " POC "
+    + monitor_summary["poc"].astype(str)
+)
+monitor_summary["plot_size"] = monitor_summary["high_pm25_days"] + 1
+```
+
+## Figure 1. PM2.5 Monitoring Sites
+
+```{python}
+#| label: fig-monitor-map
+fig = px.scatter_geo(
+    monitor_summary,
+    lat="latitude",
+    lon="longitude",
+    scope="usa",
+    projection="albers usa",
+    color="mean_pm25",
+    size="plot_size",
+    hover_name="monitor_label",
+    hover_data={
+        "cbsa_name": True,
+        "mean_pm25": ":.2f",
+        "max_pm25": ":.2f",
+        "high_pm25_days": True,
+        "high_day_rate": ":.2f",
+        "monitor_days": True,
+        "latitude": ":.3f",
+        "longitude": ":.3f",
+        "plot_size": False
+    },
+    color_continuous_scale="YlOrRd",
+    title="Annual Mean PM2.5 and High-Pollution Counts by Monitor",
+    labels={
+        "mean_pm25": "Mean PM2.5",
+        "high_pm25_days": "Days >35 ug/m3",
+        "high_day_rate": "High-day rate (%)",
+        "monitor_days": "Monitor-days"
+    },
+)
+fig.update_traces(marker=dict(line=dict(width=0.5, color="white"), opacity=0.82))
+fig.update_layout(height=610, margin=dict(l=0, r=0, t=55, b=0))
+fig.show()
+```
+
+**Caption.** 
+
+Each point represents one EPA AQS PM2.5 monitor occurrence, identified by state code, county code, site number, and POC. POC distinguishes multiple PM2.5 monitor occurrences at the same physical monitoring site. Therefore, if one site has POC 1, POC 2, and POC 3, these appear as separate monitor occurrences, even though they may share the same latitude and longitude. Color indicates the monitor occurrence’s annual mean PM2.5 concentration, while point size represents the number of monitor-days above 35 µg/m³.
+
+This map shows the spatial distribution of PM2.5 monitor occurrences included in the final dataset. Higher annual mean PM2.5 values are concentrated in several metropolitan areas, especially in Southern California, where both the color intensity and point size tend to be larger. This suggests that Southern California contributes strongly to both higher annual PM2.5 averages and short-term high-pollution episodes in this dataset.
+
+However, POC-level results should be interpreted with attention to sample size. For example, at the Rubidoux, California Site 8001, POC 1 has 346 monitor-days with a mean PM2.5 of 11.96 µg/m³ and 5 high-PM2.5 days, while POC 2 has only 3 monitor-days with a mean PM2.5 of 14.47 µg/m³ and no high-PM2.5 days. POC 3 has a much higher mean PM2.5 of 24.06 µg/m³ and a high-day rate of 17.65%, but this is based on only 17 monitor-days. This means that the darker color for POC 3 reflects a small number of high observations rather than a long annual record. Overall, the map is useful for identifying spatial patterns and unusual monitor occurrences, but annual averages from monitor occurrences with very few monitor-days should be interpreted cautiously.
+
+## Figure 2. Monthly and Seasonal PM2.5 Patterns
+
+```{python}
+#| label: fig-month-season
+fig = px.box(
+    df,
+    x="month_name",
+    y="arithmetic_mean",
+    color="season",
+    category_orders={"month_name": month_order, "season": season_order},
+    points="outliers",
+    hover_data=["date_label", "cbsa_name", "city_name", "TMAX", "PRCP", "wind_mean"],
+    title="Daily PM2.5 Distribution by Month and Season",
+    labels={
+        "month_name": "Month",
+        "arithmetic_mean": "Daily PM2.5 (ug/m3)",
+        "season": "Season",
+        "date_label": "Date",
+        "cbsa_name": "CBSA",
+        "city_name": "City",
+        "TMAX": "Max temp (C)",
+        "PRCP": "Precipitation",
+        "wind_mean": "Wind mean"
+    },
+    color_discrete_sequence=px.colors.qualitative.Safe,
+)
+fig.add_hline(
+    y=35,
+    line_dash="dash",
+    line_color="#b5453c",
+    annotation_text="35 ug/m3 high-PM2.5 threshold",
+    annotation_position="top left"
+)
+fig.update_layout(height=560, boxmode="group", legend_title_text="Season")
+fig.show()
+```
+
+**Caption.** 
+
+Figure 2 shows the monthly distribution of daily PM2.5 monitor-day concentrations in 2024, grouped by season. Each boxplot summarizes PM2.5 values for one month, and the dashed red line marks the 35 µg/m³ high-PM2.5 threshold. Most monthly median values remain below the threshold, but the extreme outliers are concentrated in specific months rather than evenly distributed across the year. July has the highest PM2.5 outliers, which is consistent with the broader 2024 North American wildfire-smoke context. In July 2024, wildland fires in Canada and the western United States produced smoke that drifted across North America, and NOAA also reported wildfire smoke causing hazy skies in late July. December and some fall months also show elevated observations, which may reflect seasonal pollution accumulation under winter or late-year meteorological conditions, such as weaker mixing and local emission effects. Overall, the figure suggests that high-PM2.5 episodes are episodic and seasonal, with summer smoke events and wintertime pollution buildup providing plausible contextual explanations. These patterns should be interpreted as descriptive evidence rather than direct causal proof, because wildfire smoke and other episodic external events are not directly measured in the model.
+
+## Figure 3. Weather and PM2.5 Explorer
+
+```{python}
+#| label: fig-weather-explorer
+weather_options = {
+    "TMAX": "Maximum temperature (C)",
+    "TMIN": "Minimum temperature (C)",
+    "PRCP": "Precipitation",
+    "wind_mean": "Mean wind speed",
+    "press_mean": "Barometric pressure",
+    "rh_mean": "Relative humidity",
+    "dew_point_max": "Maximum dew point"
+}
+initial_col = "TMAX"
+
+customdata = np.column_stack([
+    df["date_label"],
+    df["season"],
+    df["city_name"],
+    df["PRCP"].round(2),
+    df["wind_mean"].round(2),
+    df["press_mean"].round(2),
+    df["rh_mean"].round(2),
+    df["high_pm25_day"]
+])
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scattergl(
+        x=df[initial_col],
+        y=df["arithmetic_mean"],
+        mode="markers",
+        text=df["cbsa_name"],
+        customdata=customdata,
+        marker=dict(
+            size=np.where(df["high_pm25_day"].eq(1), 8, 4),
+            color=df["month"],
+            colorscale="Turbo",
+            opacity=0.55,
+            colorbar=dict(title="Month")
+        ),
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "Date: %{customdata[0]}<br>"
+            "Season: %{customdata[1]}<br>"
+            "City: %{customdata[2]}<br>"
+            "PM2.5: %{y:.2f} ug/m3<br>"
+            "Weather value: %{x:.2f}<br>"
+            "PRCP: %{customdata[3]}<br>"
+            "Wind: %{customdata[4]}<br>"
+            "Pressure: %{customdata[5]}<br>"
+            "RH: %{customdata[6]}<br>"
+            "High PM2.5 day: %{customdata[7]}<extra></extra>"
+        )
+    )
+)
+
+buttons = []
+for col, label in weather_options.items():
+    buttons.append(
+        dict(
+            label=label,
+            method="update",
+            args=[
+                {"x": [df[col]]},
+                {
+                    "title": f"Daily PM2.5 vs. {label}",
+                    "xaxis": {"title": label}
+                }
+            ]
+        )
+    )
+
+fig.add_hline(
+    y=35,
+    line_dash="dash",
+    line_color="#b5453c",
+    annotation_text="High PM2.5 threshold",
+    annotation_position="top left"
+)
+fig.update_layout(
+    title=f"Daily PM2.5 vs. {weather_options[initial_col]}",
+    xaxis_title=weather_options[initial_col],
+    yaxis_title="Daily PM2.5 (ug/m3)",
+    height=620,
+    updatemenus=[
+        dict(
+            buttons=buttons,
+            direction="down",
+            x=0.01,
+            xanchor="left",
+            y=1.12,
+            yanchor="top"
+        )
+    ],
+    margin=dict(l=20, r=20, t=90, b=40)
+)
+fig.show()
+```
+
+**Caption.** 
+
+This interactive explorer shows how daily PM2.5 changes across different weather variables. The y-axis always represents daily PM2.5 concentration, while the x-axis changes according to the selected dropdown option: maximum temperature, minimum temperature, precipitation, mean wind speed, barometric pressure, relative humidity, or maximum dew point. Each point represents one monitor-day observation. The dashed red line marks the 35 µg/m³ high-PM2.5 threshold, color represents month, and larger points indicate high-PM2.5 days. Across the different weather variables, PM2.5 does not show a simple one-direction linear relationship. Temperature variables show seasonal clustering, with many high-PM2.5 points appearing under moderate-to-warm conditions rather than across all temperatures. Precipitation shows the clearest negative pattern: most high-PM2.5 observations occur when precipitation is close to zero, while observations with heavier precipitation generally have lower PM2.5 values. Wind speed also suggests a dispersion effect, since the largest PM2.5 spikes are concentrated in moderate wind ranges rather than at the highest wind speeds. Relative humidity and dew point show wider spread, suggesting that moisture-related conditions may contribute to pollution buildup in some cases but do not explain high-PM2.5 events by themselves. Barometric pressure also shows clustered high-PM2.5 points within specific pressure ranges, which may reflect broader atmospheric stability conditions. Overall, the figure suggests that high-PM2.5 days are episodic and depend on combinations of weather, season, and location rather than a single weather predictor.

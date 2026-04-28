@@ -1,0 +1,66 @@
+---
+title: "Predicting Daily PM2.5 from Weather in Major U.S. Metropolitan Areas"
+author: "Yukun Wang"
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{python}
+import pandas as pd
+from IPython.display import Markdown, display
+
+df = pd.read_csv("pm25_weather_local_2024_2.0.csv", parse_dates=["date_local"])
+df["high_pm25_day"] = (df["arithmetic_mean"] > 35).astype(int)
+monitor_keys = ["state_code", "county_code", "site_num", "poc"]
+
+summary = pd.DataFrame({
+    "Measure": [
+        "Monitor-day observations",
+        "Unique monitors",
+        "Metropolitan areas",
+        "Date range",
+        "Mean daily PM2.5",
+        "High PM2.5 monitor-days (>35 ug/m3)"
+    ],
+    "Value": [
+        f"{len(df):,}",
+        f"{df[monitor_keys].drop_duplicates().shape[0]:,}",
+        f"{df['cbsa_name'].nunique():,}",
+        f"{df['date_local'].min().date()} to {df['date_local'].max().date()}",
+        f"{df['arithmetic_mean'].mean():.2f} ug/m3",
+        f"{int(df['high_pm25_day'].sum()):,} ({df['high_pm25_day'].mean() * 100:.2f}%)"
+    ]
+})
+```
+
+This final project extends my midterm analysis of 2024 PM2.5 and weather conditions. The core question is:
+
+> How are daily PM2.5 levels associated with temperature, precipitation, wind, pressure, and humidity across major U.S. metropolitan areas in 2024, and can these conditions help predict high-pollution days?
+
+The project uses a merged monitor-day dataset built from EPA AQS PM2.5 records, AQS weather summary files, and NOAA CDO API weather variables. The final analysis moves from descriptive exploration to prediction with Random Forest and XGBoost models.
+
+## Project Snapshot
+
+```{python}
+display(Markdown(summary.to_markdown(index=False)))
+```
+
+## What This Site Contains
+
+- [Interactive visualizations](visualizations.html): three Plotly figures for the Homework 5 requirement, including a monitor map, monthly/seasonal PM2.5 distributions, and a weather relationship explorer.
+- [Written report](report.html): the full reproducible report with hidden code, cleaned tables, model comparisons, and interpretation.
+- [Download the report](report.pdf): PDF version of the written report.
+- [GitHub repository](https://github.com/NKwyk/JSC370-project): source files, data, and website code.
+
+## Main Findings
+
+PM2.5 levels vary strongly across space and season. The highest average concentrations in this dataset appear in Southern California and several large industrial or warm-climate metropolitan areas, while summer and winter show the clearest seasonal elevation. The July peaks are consistent with the wildfire-smoke interpretation discussed in the midterm, although this report treats wildfire influence as contextual evidence rather than a directly modeled variable.
+
+The predictive models confirm that PM2.5 is not driven by one weather variable alone. Spatial location, time of year, temperature, wind, pressure, precipitation, and humidity all contribute. For continuous PM2.5 prediction, Random Forest and XGBoost are compared using RMSE, MAE, and R-squared. For high PM2.5 classification, the report focuses on recall, precision, F1, ROC-AUC, and PR-AUC because high-pollution days above 35 ug/m3 are rare.
+
+## Reproducibility
+
+The website is rendered with Quarto and Python. All code chunks are hidden in the report output, but the source `.qmd` files contain the full analysis workflow. The main data file is `pm25_weather_local_2024_2.0.csv` in this project directory.

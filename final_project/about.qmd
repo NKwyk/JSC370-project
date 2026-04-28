@@ -1,0 +1,46 @@
+---
+title: "About and Reproducibility"
+author: "Yukun Wang"
+---
+
+## Project
+
+This website presents my JSC370 final project on daily PM2.5, weather, and high-pollution prediction across major U.S. metropolitan areas in 2024.
+
+The project builds on my midterm research question:
+
+> How are daily PM2.5 levels associated with temperature, precipitation, wind, barometric pressure, and humidity-related conditions across major U.S. metropolitan areas in 2024?
+
+For the final project, I extend that descriptive analysis into predictive modeling. I use Random Forest and XGBoost models to predict daily PM2.5 concentrations and classify whether a monitor-day exceeds 35 ug/m3.
+
+## Data Sources
+
+The analysis uses a saved merged file, `pm25_weather_local_2024_2.0.csv`, created from:
+
+- EPA AQS daily PM2.5 monitor data.
+- EPA AQS daily wind, pressure, relative humidity, and dew point summaries.
+- NOAA Climate Data Online API variables for maximum temperature, minimum temperature, and precipitation.
+
+The modeling unit is a monitor-day observation. Geographic identifiers, weather measurements, and temporal variables are used as predictors.
+
+## Reproducibility Notes
+
+All source files are in the `final_project` directory:
+
+- `index.qmd` builds the project homepage.
+- `visualizations.qmd` builds the interactive Plotly figures.
+- `report.qmd` builds both the HTML report and the downloadable PDF report.
+- `_quarto.yml` defines the Quarto website structure.
+- `pm25_weather_local_2024_2.0.csv` is the analysis dataset.
+
+The project repository is available here: [https://github.com/NKwyk/JSC370-project](https://github.com/NKwyk/JSC370-project).
+
+## Rendering
+
+To reproduce the site locally, run this command from the `final_project` directory:
+
+```bash
+quarto render
+```
+
+The rendered website includes `index.html`, `visualizations.html`, `report.html`, `about.html`, and `report.pdf`.

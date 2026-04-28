@@ -1,0 +1,33 @@
+project:
+  type: website
+  output-dir: "."
+
+website:
+  title: "PM2.5 and Weather"
+  navbar:
+    left:
+      - text: "Home"
+        href: index.qmd
+      - text: "Interactive Visualizations"
+        href: visualizations.qmd
+      - text: "Report"
+        href: report.qmd
+      - text: "About"
+        href: about.qmd
+    right:
+      - icon: github
+        href: https://github.com/NKwyk/JSC370-project
+        aria-label: GitHub repository
+      - text: "JSC370"
+        href: https://jsc370.github.io/JSC370-2026/
+  page-footer:
+    center: "Copyright &copy; 2026 Yukun Wang. Built for JSC370."
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-location: right
+    toc-depth: 3
+    include-after-body: footer.html
+    css: styles.css

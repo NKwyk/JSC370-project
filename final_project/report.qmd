@@ -1,0 +1,623 @@
+---
+title: "Daily PM2.5 and Weather Conditions Across Major U.S. Metropolitan Areas in 2024"
+author: "Yukun Wang"
+date: "April 26, 2026"
+jupyter: python3
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-location: right
+    toc-depth: 3
+    number-sections: true
+    include-after-body: footer.html
+    css: styles.css
+  typst:
+    toc: true
+    number-sections: true
+    papersize: us-letter
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{python}
+import warnings
+warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_recall_curve,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import GridSearchCV, KFold, StratifiedKFold, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from xgboost import XGBClassifier, XGBRegressor
+
+RANDOM_STATE = 65
+DATA_FILE = "pm25_weather_local_2024_2.0.csv"
+
+plt.rcParams.update({
+    "figure.figsize": (8, 5),
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.alpha": 0.25,
+    "font.size": 10,
+})
+
+df = pd.read_csv(DATA_FILE, parse_dates=["date_local"])
+df["high_pm25_day"] = (df["arithmetic_mean"] > 35).astype(int)
+df["day_of_year"] = df["date_local"].dt.dayofyear
+df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
+df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
+df["month_name"] = df["date_local"].dt.month_name().str.slice(stop=3)
+
+monitor_keys = ["state_code", "county_code", "site_num", "poc"]
+df["monitor_id"] = df[monitor_keys].astype(str).agg("-".join, axis=1)
+numeric_features = [
+    "latitude",
+    "longitude",
+    "wind_mean",
+    "press_mean",
+    "rh_mean",
+    "dew_point_max",
+    "PRCP",
+    "TMAX",
+    "TMIN",
+    "month",
+    "day_of_year",
+    "month_sin",
+    "month_cos",
+]
+categorical_features = ["season", "cbsa_name", "state_name"]
+feature_cols = numeric_features + categorical_features
+
+def make_ohe():
+    try:
+        return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    except TypeError:
+        return OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+def make_preprocessor():
+    return ColumnTransformer(
+        transformers=[
+            ("num", "passthrough", numeric_features),
+            ("cat", make_ohe(), categorical_features),
+        ]
+    )
+
+def display_table(table, digits=3, index=False):
+    out = table.copy()
+    numeric_cols = out.select_dtypes(include=[np.number]).columns
+    out[numeric_cols] = out[numeric_cols].round(digits)
+    display(Markdown(out.to_markdown(index=index)))
+
+def feature_importance_table(pipe, top_n=12):
+    preprocessor = pipe.named_steps["preprocess"]
+    model = pipe.named_steps["model"]
+    names = preprocessor.get_feature_names_out()
+    cleaned = []
+    for name in names:
+        base = name.split("__", 1)[-1]
+        grouped = base
+        for cat in categorical_features:
+            if base.startswith(f"{cat}_"):
+                grouped = cat
+                break
+        cleaned.append(grouped)
+
+    imp = pd.DataFrame({
+        "feature": cleaned,
+        "importance": model.feature_importances_
+    })
+    imp = (
+        imp.groupby("feature", as_index=False)["importance"]
+        .sum()
+        .sort_values("importance", ascending=False)
+    )
+    imp["importance"] = imp["importance"] / imp["importance"].sum()
+    return imp.head(top_n)
+```
+
+# Introduction
+
+PM2.5 refers to fine particulate matter with diameter less than or equal to 2.5 micrometers. These particles are small enough to enter the respiratory system, so elevated PM2.5 is a public health concern. In my midterm project, I described 2024 PM2.5 patterns across major U.S. metropolitan areas and examined how pollution changed by place, season, and weather conditions.
+
+This final project extends that work from exploratory analysis to prediction. The main research question is:
+
+> How are daily PM2.5 levels associated with temperature, precipitation, wind, pressure, and humidity across major U.S. metropolitan areas in 2024, and can these weather and location features help predict high-pollution days?
+
+I study two related modeling tasks. First, I predict daily mean PM2.5 as a continuous outcome. Second, I classify whether a monitor-day exceeds 35 ug/m3, a high-pollution threshold used in the midterm feedback and final project plan.
+
+# Methods
+
+## Data
+
+The analysis uses `pm25_weather_local_2024_2.0.csv`, a merged monitor-day dataset built from EPA AQS PM2.5 monitor records, EPA AQS weather-related daily summary files, and NOAA Climate Data Online API temperature and precipitation variables. The unit of analysis is one PM2.5 monitor on one day.
+
+```{python}
+data_summary = pd.DataFrame({
+    "Quantity": [
+        "Monitor-day observations",
+        "Unique PM2.5 monitors",
+        "Metropolitan areas",
+        "Date range",
+        "Mean daily PM2.5",
+        "Median daily PM2.5",
+        "Maximum daily PM2.5",
+        "High PM2.5 days (>35 ug/m3)"
+    ],
+    "Value": [
+        f"{len(df):,}",
+        f"{df[monitor_keys].drop_duplicates().shape[0]:,}",
+        f"{df['cbsa_name'].nunique():,}",
+        f"{df['date_local'].min().date()} to {df['date_local'].max().date()}",
+        f"{df['arithmetic_mean'].mean():.2f} ug/m3",
+        f"{df['arithmetic_mean'].median():.2f} ug/m3",
+        f"{df['arithmetic_mean'].max():.2f} ug/m3",
+        f"{int(df['high_pm25_day'].sum()):,} ({df['high_pm25_day'].mean() * 100:.2f}%)"
+    ]
+})
+```
+
+**Table 1. Dataset summary.**
+
+```{python}
+display_table(data_summary)
+```
+
+## Feature Engineering
+
+The outcome for regression is `arithmetic_mean`, the daily mean PM2.5 concentration. The classification outcome is `high_pm25_day`, equal to 1 when daily PM2.5 is greater than 35 ug/m3. The reason I define high_pm25_day as a daily PM2.5 concentration greater than 35 µg/m³, using the U.S. EPA 24-hour PM2.5 standard as a policy-relevant threshold. This threshold is used to identify unusually high daily PM2.5 monitor-days, rather than to make formal regulatory attainment determinations.
+
+Predictors include:
+
+- Weather: maximum temperature, minimum temperature, precipitation, wind, pressure, relative humidity, and dew point.
+- Space: latitude, longitude, state, and CBSA.
+- Time: month, season, day of year, and cyclic month sine/cosine terms.
+
+To avoid target leakage, PM2.5-derived fields such as `pm25_max`, `aqi`, and `high_pm25_day` are excluded from the regression predictors, and PM2.5 concentration variables are excluded from classification predictors.
+
+## Modeling Strategy
+
+I compare Random Forest and XGBoost models because they are well suited for nonlinear relationships and interactions among weather, location, and season. Both methods were covered in the course labs. Random Forest averages many decision trees to reduce variance. XGBoost builds boosted trees sequentially and uses regularization to control overfitting.
+
+For regression, I use a 70/30 train-test split and report RMSE, MAE, and R-squared. Random Forest and XGBoost hyperparameters are selected using 3-fold cross-validation on the training set, with negative RMSE as the tuning criterion. For the regression Random Forest, the grid searches `max_features` values of 0.3, 0.6, and `"sqrt"`, and `min_samples_leaf` values of 1 and 5. For the regression XGBoost model, the grid searches `max_depth` values of 2, 4, and 6, and `learning_rate` values of 0.01 and 0.08.
+
+For classification, I use a stratified 70/30 train-test split because the high-pollution class is rare. Classification hyperparameters are selected using stratified 3-fold cross-validation with F1 as the tuning criterion. The Random Forest classifier uses class-balanced sampling and searches the same `max_features` and `min_samples_leaf` values as the regression Random Forest. The XGBoost classifier uses `scale_pos_weight` and searches `max_depth` values of 2, 4, and 6, and `learning_rate` values of 0.01 and 0.08. After cross-validation selects the XGBoost classifier hyperparameters, I use a validation split from the training data to choose the probability threshold that maximizes F1.
+
+```{python}
+X = df[feature_cols]
+y_reg = df["arithmetic_mean"]
+y_clf = df["high_pm25_day"].astype(int)
+
+X_train_reg, X_test_reg, y_train_reg, y_test_reg = train_test_split(
+    X, y_reg, test_size=0.30, random_state=RANDOM_STATE
+)
+
+reg_cv = KFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
+
+regression_models = {
+    "Random Forest": (
+        RandomForestRegressor(
+            n_estimators=250,
+            max_features=0.5,
+            min_samples_leaf=2,
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
+        ),
+        {
+            "model__max_features": [0.3, 0.6, "sqrt"],
+            "model__min_samples_leaf": [1, 5],
+        },
+    ),
+    "XGBoost": (
+        XGBRegressor(
+            n_estimators=350,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            objective="reg:squarederror",
+            importance_type="gain",
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
+        ),
+        {
+            "model__max_depth": [2, 4, 6],
+            "model__learning_rate": [0.01, 0.08],
+        },
+    ),
+}
+
+fitted_regression = {}
+regression_rows = []
+regression_cv_rows = []
+for name, (model, param_grid) in regression_models.items():
+    pipe = Pipeline([
+        ("preprocess", make_preprocessor()),
+        ("model", model),
+    ])
+    search = GridSearchCV(
+        pipe,
+        param_grid=param_grid,
+        scoring="neg_root_mean_squared_error",
+        cv=reg_cv,
+        n_jobs=1,
+    )
+    search.fit(X_train_reg, y_train_reg)
+    pipe = search.best_estimator_
+    pred = pipe.predict(X_test_reg)
+    fitted_regression[name] = pipe
+    regression_cv_rows.append({
+        "Model": name,
+        "Best CV RMSE": -search.best_score_,
+        "Best parameters": ", ".join(
+            f"{key.replace('model__', '')}={value}"
+            for key, value in search.best_params_.items()
+        ),
+    })
+    regression_rows.append({
+        "Model": name,
+        "RMSE": np.sqrt(mean_squared_error(y_test_reg, pred)),
+        "MAE": mean_absolute_error(y_test_reg, pred),
+        "R-squared": r2_score(y_test_reg, pred),
+    })
+
+regression_results = pd.DataFrame(regression_rows).sort_values("RMSE")
+regression_cv_results = pd.DataFrame(regression_cv_rows)
+best_regression_name = regression_results.iloc[0]["Model"]
+best_regression_pipe = fitted_regression[best_regression_name]
+```
+
+```{python}
+X_train_clf_full, X_test_clf, y_train_clf_full, y_test_clf = train_test_split(
+    X,
+    y_clf,
+    test_size=0.30,
+    random_state=RANDOM_STATE,
+    stratify=y_clf,
+)
+X_train_clf, X_val_clf, y_train_clf, y_val_clf = train_test_split(
+    X_train_clf_full,
+    y_train_clf_full,
+    test_size=0.25,
+    random_state=RANDOM_STATE,
+    stratify=y_train_clf_full,
+)
+
+scale_pos_weight = (
+    (y_train_clf_full == 0).sum() / max((y_train_clf_full == 1).sum(), 1)
+)
+
+clf_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=RANDOM_STATE)
+
+xgb_threshold_search = GridSearchCV(
+    Pipeline([
+        ("preprocess", make_preprocessor()),
+        ("model", XGBClassifier(
+            n_estimators=500,
+            max_depth=3,
+            learning_rate=0.03,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            eval_metric="logloss",
+            scale_pos_weight=scale_pos_weight,
+            importance_type="gain",
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
+        )),
+    ]),
+    param_grid={
+        "model__max_depth": [2, 4, 6],
+        "model__learning_rate": [0.01, 0.08],
+    },
+    scoring="f1",
+    cv=clf_cv,
+    n_jobs=1,
+)
+xgb_threshold_search.fit(X_train_clf, y_train_clf)
+xgb_threshold_pipe = xgb_threshold_search.best_estimator_
+val_prob = xgb_threshold_pipe.predict_proba(X_val_clf)[:, 1]
+precision, recall, thresholds = precision_recall_curve(y_val_clf, val_prob)
+f1_values = 2 * precision * recall / (precision + recall + 1e-12)
+best_threshold = 0.5
+if len(thresholds) > 0:
+    best_threshold = float(thresholds[np.nanargmax(f1_values[:-1])])
+
+classification_models = {
+    "Random Forest": (
+        RandomForestClassifier(
+            n_estimators=350,
+            max_features=0.5,
+            min_samples_leaf=1,
+            class_weight="balanced_subsample",
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
+        ),
+        {
+            "model__max_features": [0.3, 0.6, "sqrt"],
+            "model__min_samples_leaf": [1, 5],
+        },
+        0.5,
+    ),
+    "XGBoost": (
+        XGBClassifier(
+        n_estimators=500,
+        max_depth=3,
+        learning_rate=0.03,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        eval_metric="logloss",
+        scale_pos_weight=scale_pos_weight,
+        importance_type="gain",
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+        ),
+        {
+            "model__max_depth": [2, 4, 6],
+            "model__learning_rate": [0.01, 0.08],
+        },
+        best_threshold,
+    ),
+}
+
+def evaluate_classifier(pipe, threshold):
+    prob = pipe.predict_proba(X_test_clf)[:, 1]
+    pred = (prob >= threshold).astype(int)
+    return {
+        "Accuracy": accuracy_score(y_test_clf, pred),
+        "Balanced accuracy": balanced_accuracy_score(y_test_clf, pred),
+        "Precision": precision_score(y_test_clf, pred, zero_division=0),
+        "Recall": recall_score(y_test_clf, pred, zero_division=0),
+        "F1": f1_score(y_test_clf, pred, zero_division=0),
+        "ROC-AUC": roc_auc_score(y_test_clf, prob),
+        "PR-AUC": average_precision_score(y_test_clf, prob),
+        "Threshold": threshold,
+        "Predicted positives": int(pred.sum()),
+        "Predictions": pred,
+        "Probabilities": prob,
+    }
+
+fitted_classification = {}
+classification_rows = []
+classification_cv_rows = []
+classification_eval = {}
+for name, (model, param_grid, threshold) in classification_models.items():
+    pipe = Pipeline([
+        ("preprocess", make_preprocessor()),
+        ("model", model),
+    ])
+    search = GridSearchCV(
+        pipe,
+        param_grid=param_grid,
+        scoring="f1",
+        cv=clf_cv,
+        n_jobs=1,
+    )
+    search.fit(X_train_clf_full, y_train_clf_full)
+    pipe = search.best_estimator_
+    fitted_classification[name] = pipe
+    classification_cv_rows.append({
+        "Model": name,
+        "Best CV F1": search.best_score_,
+        "Best parameters": ", ".join(
+            f"{key.replace('model__', '')}={value}"
+            for key, value in search.best_params_.items()
+        ),
+    })
+    metrics = evaluate_classifier(pipe, threshold)
+    classification_eval[name] = metrics
+    classification_rows.append({
+        key: value for key, value in metrics.items()
+        if key not in ["Predictions", "Probabilities"]
+    } | {"Model": name})
+
+classification_cv_results = pd.DataFrame(classification_cv_rows)
+classification_results = (
+    pd.DataFrame(classification_rows)
+    .loc[:, [
+        "Model", "Threshold", "Predicted positives", "Accuracy",
+        "Balanced accuracy", "Precision", "Recall", "F1",
+        "ROC-AUC", "PR-AUC"
+    ]]
+    .sort_values("F1", ascending=False)
+)
+best_classification_name = classification_results.iloc[0]["Model"]
+best_classification_pipe = fitted_classification[best_classification_name]
+best_classification_pred = classification_eval[best_classification_name]["Predictions"]
+```
+
+# Results
+
+## Descriptive Patterns
+
+```{python}
+cbsa_summary = (
+    df.groupby("cbsa_name")
+    .agg(
+        monitor_days=("arithmetic_mean", "size"),
+        monitors=("monitor_id", "nunique"),
+        mean_pm25=("arithmetic_mean", "mean"),
+        max_pm25=("arithmetic_mean", "max"),
+        high_pm25_days=("high_pm25_day", "sum"),
+    )
+    .reset_index()
+)
+cbsa_summary["high_day_rate"] = (
+    cbsa_summary["high_pm25_days"] / cbsa_summary["monitor_days"] * 100
+)
+cbsa_summary = cbsa_summary.sort_values("mean_pm25", ascending=False)
+```
+
+**Table 2. CBSA summary, sorted by annual mean PM2.5.**
+
+```{python}
+display_table(cbsa_summary.head(5), digits=2)
+```
+
+Table 2 summarizes the metropolitan areas with the highest average daily PM2.5 concentrations in the final dataset. Riverside-San Bernardino-Ontario, CA has the highest mean PM2.5 level, with an average of 12.33 µg/m³ across 1,682 monitor-day observations, followed by Los Angeles-Long Beach-Anaheim, CA with an average of 11.46 µg/m³. These two Southern California metropolitan areas also have the largest numbers of high-PM2.5 monitor-days, suggesting that elevated PM2.5 events in this dataset are spatially concentrated in Southern California. Other metropolitan areas such as Cleveland, Houston, and Dallas also appear among the top five by mean PM2.5, but they show fewer or no high-pollution days above 35 µg/m³. Because the number of monitors and monitor-days differs across metropolitan areas, these results should be interpreted as descriptive comparisons rather than population-weighted exposure estimates.
+
+```{python}
+#| label: fig-monthly-static
+#| fig-cap: "Figure 1. Monthly distribution of daily PM2.5 monitor-day concentrations in 2024."
+month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+plot_df = df.copy()
+plot_df["month_name"] = pd.Categorical(plot_df["month_name"], categories=month_order, ordered=True)
+
+fig, ax = plt.subplots(figsize=(9, 4.8))
+plot_df.boxplot(
+    column="arithmetic_mean",
+    by="month_name",
+    ax=ax,
+    showfliers=True,
+    grid=False,
+    color=dict(boxes="#0b6fa4", whiskers="#0b6fa4", medians="#b5453c", caps="#0b6fa4"),
+)
+ax.axhline(35, color="#b5453c", linestyle="--", linewidth=1)
+ax.set_title("")
+fig.suptitle("")
+ax.set_xlabel("Month")
+ax.set_ylabel("Daily PM2.5 (ug/m3)")
+plt.tight_layout()
+plt.show()
+```
+
+The Figure shows the monthly distribution of daily PM2.5 concentrations across monitor-day observations. Median PM2.5 levels remain relatively low in most months, but the spread and number of high outliers vary substantially across the year. July shows the most extreme PM2.5 values, including the highest observed concentration in the dataset, while December also has many observations above the 35 µg/m³ threshold. These patterns suggest that high-PM2.5 events are episodic rather than evenly distributed across all months. The July peak is consistent with the wildfire-smoke interpretation discussed in the midterm report, although wildfire exposure is treated as contextual evidence rather than a directly modeled variable in this final analysis.
+
+## Regression Models
+
+**Table 3. Cross-validation selected hyperparameters for regression models.**
+
+```{python}
+display_table(regression_cv_results, digits=3)
+```
+
+Table 3 shows the hyperparameters selected by cross-validation for the two regression models. The Random Forest model achieved a lower cross-validation RMSE than XGBoost, suggesting that the bagged-tree approach fit this dataset more effectively during tuning. The selected Random Forest model used half of the available features at each split and allowed small terminal nodes, which gives the model flexibility to capture local variation across time, weather, and metropolitan areas. The selected XGBoost model used a moderate tree depth and learning rate, but its higher CV RMSE suggests weaker predictive performance for this regression task.
+
+**Table 4. Regression model performance on the test set.**
+
+```{python}
+display_table(regression_results, digits=3)
+```
+
+Table 4 compares model performance on the held-out test set. Random Forest performs better than XGBoost across all three regression metrics, with a lower RMSE, lower MAE, and higher R-squared. The Random Forest test RMSE of 3.318 µg/m³ means that its daily PM2.5 predictions are typically off by about 3.3 µg/m³. Its R-squared of 0.656 indicates that the model explains about 65.6% of the variation in daily mean PM2.5 in the test data. Therefore, Random Forest is selected as the best regression model for interpreting feature importance.
+
+```{python}
+#| label: fig-reg-importance
+#| fig-cap: "Figure 2. Aggregated feature importance for the best regression model."
+reg_importance = feature_importance_table(best_regression_pipe, top_n=12).sort_values("importance")
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.barh(reg_importance["feature"], reg_importance["importance"], color="#16817a")
+ax.set_xlabel("Share of model importance")
+ax.set_ylabel("")
+ax.set_title(f"{best_regression_name} regression feature importance")
+plt.tight_layout()
+plt.show()
+```
+
+Figure 2 presents the aggregated feature importance from the best regression model, the Random Forest regressor. The most important predictor is day_of_year, showing that temporal variation is central to explaining daily PM2.5 patterns. Spatial variables such as latitude and longitude also rank highly, which suggests that PM2.5 levels vary substantially across geographic regions. Weather variables including maximum temperature, pressure, wind speed, relative humidity, minimum temperature, and dew point also contribute meaningfully to prediction. Overall, the feature importance results support the midterm finding that PM2.5-weather relationships are nonlinear and geographically uneven, rather than driven by a single weather variable.
+
+## High PM2.5 Classification
+
+High-PM2.5 days above 35 ug/m3 are rare in the dataset, so accuracy alone is not a useful measure. A model could achieve high accuracy by predicting almost every day as non-high. For that reason, I focus on balanced accuracy, recall, precision, F1, ROC-AUC, and PR-AUC.
+
+**Table 5. Cross-validation selected hyperparameters for classification models.**
+
+```{python}
+display_table(classification_cv_results, digits=3)
+```
+
+Table 5 shows the cross-validation results for the high-PM2.5 classification models. Random Forest achieves a higher cross-validation F1 score than XGBoost, suggesting that it performed better during tuning when precision and recall were balanced together. However, because high-PM2.5 days are rare, the final test-set comparison is more important for evaluating whether the model can actually identify high-pollution events.
+
+**Table 6. Classification model performance for PM2.5 greater than 35 ug/m3.**
+
+```{python}
+display_table(classification_results, digits=3)
+```
+
+Table 6 compares the two classifiers on the held-out test set. Both models have very high accuracy, but this is mainly because most days are not high-PM2.5 days. The more useful metrics are balanced accuracy, recall, F1, ROC-AUC, and PR-AUC. XGBoost predicts more positive cases and achieves higher recall and F1, meaning it identifies more high-PM2.5 events than Random Forest. Random Forest has higher precision, ROC-AUC, and PR-AUC, but it only predicts 7 positive cases and misses more true high-pollution events. Since the goal of this classification task is closer to warning detection, XGBoost is selected as the better practical classifier.
+
+```{python}
+#| label: fig-confusion
+#| fig-cap: "Figure 3. Confusion matrix for the best high-PM2.5 classifier on the test set."
+cm = confusion_matrix(y_test_clf, best_classification_pred, labels=[0, 1])
+fig, ax = plt.subplots(figsize=(5.5, 4.5))
+disp = ConfusionMatrixDisplay(
+    confusion_matrix=cm,
+    display_labels=["Not high", "High >35"]
+)
+disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
+ax.set_title(f"{best_classification_name} high-PM2.5 classification")
+plt.tight_layout()
+plt.show()
+```
+
+The confusion matrix shows the tradeoff in the selected XGBoost classifier. The model correctly identifies 12 high-PM2.5 observations, while missing 10 high-PM2.5 observations. It also produces 9 false positives among the non-high observations. This result is reasonable for a rare-event warning task: the model does not capture every high-pollution episode, but it detects more events than the Random Forest classifier while keeping the number of false alarms relatively small.
+
+```{python}
+#| label: fig-clf-importance
+#| fig-cap: "Figure 4. Aggregated feature importance for the best high-PM2.5 classifier."
+clf_importance = feature_importance_table(best_classification_pipe, top_n=12).sort_values("importance")
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.barh(clf_importance["feature"], clf_importance["importance"], color="#b5453c")
+ax.set_xlabel("Share of model importance")
+ax.set_ylabel("")
+ax.set_title(f"{best_classification_name} classification feature importance")
+plt.tight_layout()
+plt.show()
+```
+
+Figure 4 shows that the most important predictors for high-PM2.5 classification are spatial and seasonal variables. cbsa_name, season, state_name, and longitude have the largest importance values, suggesting that high-pollution events are strongly shaped by where and when they occur. Weather variables such as precipitation, temperature, and wind also contribute, but they are less dominant than location and season. This supports the interpretation that high PM2.5 episodes are not explained by a single weather factor alone; instead, they reflect interactions between geography, seasonality, and meteorological conditions.
+
+Overall, the classification results should be interpreted as a high-pollution warning task rather than a balanced everyday classification problem. XGBoost is useful here because class weighting and probability threshold adjustment improve recall for rare high-PM2.5 events. The tradeoff is that the model may produce some false positives, which is expected when the goal is to identify rare hazardous episodes rather than simply maximize overall accuracy.
+
+The full interactive versions of the spatial and weather figures are available on the [interactive visualizations page](visualizations.html).
+
+# Conclusions and Limitations
+
+## Conclusions
+
+This project shows that daily PM2.5 variation is shaped by a combination of location, season, and weather conditions. The descriptive results show clear spatial differences across metropolitan areas, with some regions having higher average PM2.5 and more high-pollution monitor-days than others. The monthly distribution also suggests that extreme PM2.5 events are not evenly distributed throughout the year, but instead appear more strongly in specific periods such as July and winter months.
+
+The modeling results support the idea that PM2.5 prediction requires both environmental and contextual information. Weather variables such as temperature, precipitation, wind, humidity, and pressure contribute to prediction, but location and time variables are also important. This suggests that PM2.5 is not driven by one single weather factor. Instead, pollution levels reflect interactions between geography, seasonality, and meteorological conditions.
+
+For continuous PM2.5 prediction, the Random Forest model performs better than XGBoost on the test set, with lower prediction error and higher R-squared. For high-PM2.5 classification, XGBoost is more useful as a warning-oriented model because it identifies more rare high-pollution events. Overall, the project shows that tree-based machine learning models can provide useful predictive summaries of PM2.5 patterns, but the results should be interpreted as predictive associations rather than causal explanations.
+
+## Limitations
+
+- First, the train-test split is based on a random split of monitor-day observations. This is useful for measuring general predictive performance, but it is not the strictest test of generalization. Since observations from the same monitor, city, or season can appear in both the training and testing sets, the model may partially benefit from repeated spatial or temporal patterns. A more rigorous future approach would use grouped splitting by monitor or city, or time-based splitting where earlier months are used for training and later months are used for testing.
+
+- Second, the high-PM2.5 classification task is highly imbalanced. The threshold of 35 µg/m³ is relatively high, so most observations are classified as non-high days. Because of this, accuracy can look very high even when the model does not identify many true high-pollution events. This is why balanced accuracy, recall, F1, ROC-AUC, and PR-AUC are more informative than accuracy alone.
+
+- Third, the 35 µg/m³ threshold is useful for defining extreme PM2.5 days, but it may be too strict for some metropolitan areas where daily PM2.5 rarely reaches that level. As a result, the classification model is mainly detecting rare pollution spikes rather than more moderate but still meaningful pollution variation. Future work could test alternative thresholds or use multi-class air-quality categories.
+
+- Fourth, wildfire smoke is discussed as a possible explanation for some summer PM2.5 peaks, especially the July outliers, but wildfire exposure is not directly measured in the model. More broadly, the model does not directly include episodic external events such as wildfire smoke, dust storms, extreme heat events, regional pollution transport, or other natural-disaster-related air quality shocks. Therefore, these factors should be treated as contextual interpretations rather than causal variables. Future work could add smoke plume data, fire counts, satellite aerosol measurements, dust event indicators, extreme-weather indicators, or distance-to-fire variables to better capture these short-term pollution episodes.
+
+- Fifth, NOAA temperature and precipitation variables are attached at the broader metropolitan level, while PM2.5 is measured at individual monitoring sites. This mismatch may miss local microclimate differences near specific monitors. More localized weather station matching or spatial interpolation could improve the precision of the weather variables.
+
+- Finally, the analysis only uses data from 2024. One year of data is enough for a course project, but it may not fully represent longer-term PM2.5 patterns. Future work could extend the dataset across multiple years to test whether the same spatial, seasonal, and weather relationships remain stable over time.

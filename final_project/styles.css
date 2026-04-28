@@ -1,0 +1,80 @@
+:root {
+  --pm25-ink: #1f2933;
+  --pm25-muted: #5b6776;
+  --pm25-blue: #0b6fa4;
+  --pm25-teal: #16817a;
+  --pm25-red: #b5453c;
+  --pm25-panel: #f6f8fb;
+  --pm25-border: #d8e0ea;
+}
+
+body {
+  color: var(--pm25-ink);
+  line-height: 1.6;
+}
+
+h1.title {
+  font-size: 2.2rem;
+  line-height: 1.15;
+}
+
+h2 {
+  margin-top: 2rem;
+  border-bottom: 1px solid var(--pm25-border);
+  padding-bottom: 0.35rem;
+}
+
+h3 {
+  margin-top: 1.5rem;
+}
+
+a {
+  color: var(--pm25-blue);
+}
+
+blockquote {
+  border-left: 4px solid var(--pm25-teal);
+  color: var(--pm25-muted);
+  padding: 0.25rem 1rem;
+}
+
+table {
+  width: 100%;
+}
+
+caption {
+  caption-side: top;
+  color: var(--pm25-muted);
+  font-weight: 600;
+  text-align: left;
+}
+
+.callout-note,
+.callout-tip,
+.callout-warning {
+  border-radius: 8px;
+}
+
+.quarto-figure,
+.cell-output-display {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.figure-caption,
+figcaption {
+  color: var(--pm25-muted);
+  font-size: 0.95rem;
+}
+
+.navbar-title {
+  font-weight: 700;
+}
+
+.panel-tabset .nav-tabs {
+  margin-top: 1rem;
+}
+
+code {
+  font-size: 0.92rem;
+}
