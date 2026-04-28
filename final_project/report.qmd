@@ -207,9 +207,9 @@ To avoid target leakage, PM2.5-derived fields such as `pm25_max`, `aqi`, and `hi
 
 I compare Random Forest and XGBoost models because they are well suited for nonlinear relationships and interactions among weather, location, and season. Both methods were covered in the course labs. Random Forest averages many decision trees to reduce variance. XGBoost builds boosted trees sequentially and uses regularization to control overfitting.
 
-For regression, I use a 70/30 train-test split and report RMSE, MAE, and R-squared. Random Forest and XGBoost hyperparameters are selected using 3-fold cross-validation on the training set, with negative RMSE as the tuning criterion. For the regression Random Forest, the grid searches `max_features` values of 0.3, 0.6, and `"sqrt"`, and `min_samples_leaf` values of 1 and 5. For the regression XGBoost model, the grid searches `max_depth` values of 2, 4, and 6, and `learning_rate` values of 0.01 and 0.08.
+For regression, I use a 70/30 train-test split and report RMSE, MAE, and R-squared. Random Forest and XGBoost hyperparameters are selected using 3-fold cross-validation on the training set, with negative RMSE as the tuning criterion. For the regression Random Forest, the grid searches `n_estimators`, `max_features`, and `min_samples_leaf`. For the regression XGBoost model, the grid searches `n_estimators`, `max_depth`, and `learning_rate`.
 
-For classification, I use a stratified 70/30 train-test split because the high-pollution class is rare. Classification hyperparameters are selected using stratified 3-fold cross-validation with F1 as the tuning criterion. The Random Forest classifier uses class-balanced sampling and searches the same `max_features` and `min_samples_leaf` values as the regression Random Forest. The XGBoost classifier uses `scale_pos_weight` and searches `max_depth` values of 2, 4, and 6, and `learning_rate` values of 0.01 and 0.08. After cross-validation selects the XGBoost classifier hyperparameters, I use a validation split from the training data to choose the probability threshold that maximizes F1.
+For classification, I use a stratified 70/30 train-test split because the high-pollution class is rare. Classification hyperparameters are selected using stratified 3-fold cross-validation with F1 as the tuning criterion. The Random Forest classifier uses class-balanced sampling and searches `n_estimators`, `max_features`, and `min_samples_leaf`. The XGBoost classifier uses `scale_pos_weight` and searches `n_estimators`, `max_depth`, and `learning_rate`. After cross-validation selects the XGBoost classifier hyperparameters, I use a validation split from the training data to choose the probability threshold that maximizes F1.
 
 ```{python}
 X = df[feature_cols]
@@ -232,6 +232,7 @@ regression_models = {
             n_jobs=-1,
         ),
         {
+            "model__n_estimators": [200, 350],
             "model__max_features": [0.3, 0.6, "sqrt"],
             "model__min_samples_leaf": [1, 5],
         },
@@ -249,6 +250,7 @@ regression_models = {
             n_jobs=-1,
         ),
         {
+            "model__n_estimators": [250, 500],
             "model__max_depth": [2, 4, 6],
             "model__learning_rate": [0.01, 0.08],
         },
@@ -334,6 +336,7 @@ xgb_threshold_search = GridSearchCV(
         )),
     ]),
     param_grid={
+        "model__n_estimators": [300, 500],
         "model__max_depth": [2, 4, 6],
         "model__learning_rate": [0.01, 0.08],
     },
@@ -361,6 +364,7 @@ classification_models = {
             n_jobs=-1,
         ),
         {
+            "model__n_estimators": [250, 500],
             "model__max_features": [0.3, 0.6, "sqrt"],
             "model__min_samples_leaf": [1, 5],
         },
@@ -380,6 +384,7 @@ classification_models = {
         n_jobs=-1,
         ),
         {
+            "model__n_estimators": [300, 500],
             "model__max_depth": [2, 4, 6],
             "model__learning_rate": [0.01, 0.08],
         },
@@ -519,7 +524,7 @@ The Figure shows the monthly distribution of daily PM2.5 concentrations across m
 display_table(regression_cv_results, digits=3)
 ```
 
-Table 3 shows the hyperparameters selected by cross-validation for the two regression models. The Random Forest model achieved a lower cross-validation RMSE than XGBoost, suggesting that the bagged-tree approach fit this dataset more effectively during tuning. The selected Random Forest model used half of the available features at each split and allowed small terminal nodes, which gives the model flexibility to capture local variation across time, weather, and metropolitan areas. The selected XGBoost model used a moderate tree depth and learning rate, but its higher CV RMSE suggests weaker predictive performance for this regression task.
+Table 3 shows the hyperparameters selected by cross-validation for the two regression models. XGBoost achieved a slightly lower cross-validation RMSE than Random Forest, with a best CV RMSE of 3.402 compared with 3.548 for Random Forest. This suggests that the boosted-tree model fit the training folds somewhat better during tuning. The selected Random Forest model used 200 trees, 60% of the available features at each split, and a minimum leaf size of 1, giving the model flexibility while still using feature subsampling to reduce correlation among trees. The selected XGBoost model used 500 trees, a maximum tree depth of 6, and a learning rate of 0.08, indicating that the best tuned boosted model favored a relatively larger ensemble with moderately deep trees.
 
 **Table 4. Regression model performance on the test set.**
 
@@ -527,14 +532,14 @@ Table 3 shows the hyperparameters selected by cross-validation for the two regre
 display_table(regression_results, digits=3)
 ```
 
-Table 4 compares model performance on the held-out test set. Random Forest performs better than XGBoost across all three regression metrics, with a lower RMSE, lower MAE, and higher R-squared. The Random Forest test RMSE of 3.318 µg/m³ means that its daily PM2.5 predictions are typically off by about 3.3 µg/m³. Its R-squared of 0.656 indicates that the model explains about 65.6% of the variation in daily mean PM2.5 in the test data. Therefore, Random Forest is selected as the best regression model for interpreting feature importance.
+Table 4 compares model performance on the held-out test set. XGBoost performs slightly better than Random Forest across all three regression metrics, with a lower RMSE, lower MAE, and higher R-squared. The XGBoost test RMSE of 3.246 µg/m³ means that its daily PM2.5 predictions are typically off by about 3.25 µg/m³. Its R-squared of 0.671 indicates that the model explains about 67.1% of the variation in daily mean PM2.5 in the test data. Therefore, XGBoost is selected as the best regression model for interpreting feature importance.
 
 ```{python}
 #| label: fig-reg-importance
 #| fig-cap: "Figure 2. Aggregated feature importance for the best regression model."
 reg_importance = feature_importance_table(best_regression_pipe, top_n=12).sort_values("importance")
 fig, ax = plt.subplots(figsize=(8, 5))
-ax.barh(reg_importance["feature"], reg_importance["importance"], color="#16817a")
+ax.barh(reg_importance["feature"], reg_importance["importance"], color="#b5453c")
 ax.set_xlabel("Share of model importance")
 ax.set_ylabel("")
 ax.set_title(f"{best_regression_name} regression feature importance")
@@ -542,7 +547,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-Figure 2 presents the aggregated feature importance from the best regression model, the Random Forest regressor. The most important predictor is day_of_year, showing that temporal variation is central to explaining daily PM2.5 patterns. Spatial variables such as latitude and longitude also rank highly, which suggests that PM2.5 levels vary substantially across geographic regions. Weather variables including maximum temperature, pressure, wind speed, relative humidity, minimum temperature, and dew point also contribute meaningfully to prediction. Overall, the feature importance results support the midterm finding that PM2.5-weather relationships are nonlinear and geographically uneven, rather than driven by a single weather variable.
+Figure 2 presents the aggregated feature importance from the best regression model, the XGBoost regressor. The most important predictors are state_name and cbsa_name, showing that geographic location is central to predicting daily PM2.5 concentrations in this dataset. Seasonal and monthly variables also rank highly, suggesting that temporal patterns across the year explain a meaningful share of PM2.5 variation. Latitude and longitude provide additional spatial information, while weather variables such as maximum temperature, minimum temperature, and relative humidity contribute more modestly. Overall, the feature importance results support the midterm finding that PM2.5 patterns are strongly spatial and seasonal, with weather conditions adding predictive information rather than acting as the only drivers.
 
 ## High PM2.5 Classification
 
@@ -554,7 +559,7 @@ High-PM2.5 days above 35 ug/m3 are rare in the dataset, so accuracy alone is not
 display_table(classification_cv_results, digits=3)
 ```
 
-Table 5 shows the cross-validation results for the high-PM2.5 classification models. Random Forest achieves a higher cross-validation F1 score than XGBoost, suggesting that it performed better during tuning when precision and recall were balanced together. However, because high-PM2.5 days are rare, the final test-set comparison is more important for evaluating whether the model can actually identify high-pollution events.
+Table 5 shows the cross-validation results for the high-PM2.5 classification models. Random Forest achieves a slightly higher cross-validation F1 score than XGBoost, with a best CV F1 of 0.488 compared with 0.466. This suggests that Random Forest performed somewhat better during tuning when precision and recall were balanced together. The selected Random Forest classifier used 250 trees, 60% of the available features at each split, and a minimum leaf size of 5. The selected XGBoost classifier used 300 trees, a maximum depth of 6, and a learning rate of 0.08. Because high-PM2.5 days are rare, the final held-out test set comparison is still important for evaluating whether the models can identify high-pollution events beyond the cross-validation folds.
 
 **Table 6. Classification model performance for PM2.5 greater than 35 ug/m3.**
 
@@ -562,7 +567,7 @@ Table 5 shows the cross-validation results for the high-PM2.5 classification mod
 display_table(classification_results, digits=3)
 ```
 
-Table 6 compares the two classifiers on the held-out test set. Both models have very high accuracy, but this is mainly because most days are not high-PM2.5 days. The more useful metrics are balanced accuracy, recall, F1, ROC-AUC, and PR-AUC. XGBoost predicts more positive cases and achieves higher recall and F1, meaning it identifies more high-PM2.5 events than Random Forest. Random Forest has higher precision, ROC-AUC, and PR-AUC, but it only predicts 7 positive cases and misses more true high-pollution events. Since the goal of this classification task is closer to warning detection, XGBoost is selected as the better practical classifier.
+Table 6 compares the two classifiers on the held-out test set. Both models have very high accuracy of 0.995, but this is mainly because most observations are not high-PM2.5 days. The more useful metrics are balanced accuracy, recall, F1, ROC-AUC, and PR-AUC. Random Forest predicts more positive cases and achieves higher balanced accuracy, recall, and F1 than XGBoost, meaning it identifies more high-PM2.5 events on the test set while maintaining similar precision. XGBoost has a slightly higher PR-AUC, but its lower recall and F1 indicate weaker event detection at the selected threshold. Since the goal of this classification task is closer to warning detection, Random Forest is selected as the better practical classifier.
 
 ```{python}
 #| label: fig-confusion
@@ -579,14 +584,14 @@ plt.tight_layout()
 plt.show()
 ```
 
-The confusion matrix shows the tradeoff in the selected XGBoost classifier. The model correctly identifies 12 high-PM2.5 observations, while missing 10 high-PM2.5 observations. It also produces 9 false positives among the non-high observations. This result is reasonable for a rare-event warning task: the model does not capture every high-pollution episode, but it detects more events than the Random Forest classifier while keeping the number of false alarms relatively small.
+The confusion matrix shows the tradeoff in the selected Random Forest classifier. The model correctly identifies 12 high-PM2.5 observations, while missing 10 high-PM2.5 observations. It also produces 9 false positives among the non-high observations. This result is reasonable for a rare-event warning task: the model does not capture every high-pollution episode, but it detects more than half of the high-PM2.5 observations while keeping the number of false alarms relatively small compared with the large number of non-high observations.
 
 ```{python}
 #| label: fig-clf-importance
 #| fig-cap: "Figure 4. Aggregated feature importance for the best high-PM2.5 classifier."
 clf_importance = feature_importance_table(best_classification_pipe, top_n=12).sort_values("importance")
 fig, ax = plt.subplots(figsize=(8, 5))
-ax.barh(clf_importance["feature"], clf_importance["importance"], color="#b5453c")
+ax.barh(clf_importance["feature"], clf_importance["importance"], color="#16817a")
 ax.set_xlabel("Share of model importance")
 ax.set_ylabel("")
 ax.set_title(f"{best_classification_name} classification feature importance")
@@ -594,7 +599,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-Figure 4 shows that the most important predictors for high-PM2.5 classification are spatial and seasonal variables. cbsa_name, season, state_name, and longitude have the largest importance values, suggesting that high-pollution events are strongly shaped by where and when they occur. Weather variables such as precipitation, temperature, and wind also contribute, but they are less dominant than location and season. This supports the interpretation that high PM2.5 episodes are not explained by a single weather factor alone; instead, they reflect interactions between geography, seasonality, and meteorological conditions.
+Figure 4 shows that the most important predictors for high-PM2.5 classification are longitude and day_of_year, suggesting that both geography and timing within the year are central to identifying high-pollution events. Temperature variables, especially minimum and maximum temperature, also rank highly, followed by latitude and mean pressure. State, wind speed, relative humidity, and monthly cyclic terms provide additional predictive information. This pattern suggests that high PM2.5 episodes are not explained by a single weather factor alone; instead, they reflect interactions between geographic location, seasonality, and meteorological conditions.
 
 Overall, the classification results should be interpreted as a high-pollution warning task rather than a balanced everyday classification problem. XGBoost is useful here because class weighting and probability threshold adjustment improve recall for rare high-PM2.5 events. The tradeoff is that the model may produce some false positives, which is expected when the goal is to identify rare hazardous episodes rather than simply maximize overall accuracy.
 

@@ -8,7 +8,7 @@
 
 <meta name="author" content="Yukun Wang">
 
-<title>Predicting Daily PM2.5 from Weather in Major U.S. Metropolitan Areas – PM2.5 Prediction</title>
+<title>About and Reproducibility – PM2.5 Prediction</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -20,6 +20,41 @@ ul.task-list li input[type="checkbox"] {
   width: 0.8em;
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
 }
 </style>
 
@@ -92,7 +127,7 @@ ul.task-list li input[type="checkbox"] {
           <div class="collapse navbar-collapse" id="navbarCollapse">
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
-    <a class="nav-link active" href="./index.html" aria-current="page"> 
+    <a class="nav-link" href="./index.html"> 
 <span class="menu-text">Home</span></a>
   </li>  
   <li class="nav-item">
@@ -104,7 +139,7 @@ ul.task-list li input[type="checkbox"] {
 <span class="menu-text">Report</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="./about.html"> 
+    <a class="nav-link active" href="./about.html" aria-current="page"> 
 <span class="menu-text">About</span></a>
   </li>  
 </ul>
@@ -134,10 +169,10 @@ ul.task-list li input[type="checkbox"] {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#project-snapshot" id="toc-project-snapshot" class="nav-link active" data-scroll-target="#project-snapshot">Project Snapshot</a></li>
-  <li><a href="#what-this-site-contains" id="toc-what-this-site-contains" class="nav-link" data-scroll-target="#what-this-site-contains">What This Site Contains</a></li>
-  <li><a href="#main-findings" id="toc-main-findings" class="nav-link" data-scroll-target="#main-findings">Main Findings</a></li>
-  <li><a href="#reproducibility" id="toc-reproducibility" class="nav-link" data-scroll-target="#reproducibility">Reproducibility</a></li>
+  <li><a href="#project" id="toc-project" class="nav-link active" data-scroll-target="#project">Project</a></li>
+  <li><a href="#data-sources" id="toc-data-sources" class="nav-link" data-scroll-target="#data-sources">Data Sources</a></li>
+  <li><a href="#reproducibility-notes" id="toc-reproducibility-notes" class="nav-link" data-scroll-target="#reproducibility-notes">Reproducibility Notes</a></li>
+  <li><a href="#rendering" id="toc-rendering" class="nav-link" data-scroll-target="#rendering">Rendering</a></li>
   </ul>
 </nav>
     </div>
@@ -146,7 +181,7 @@ ul.task-list li input[type="checkbox"] {
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Predicting Daily PM2.5 from Weather in Major U.S. Metropolitan Areas</h1>
+<h1 class="title">About and Reproducibility</h1>
 </div>
 
 
@@ -169,69 +204,43 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p>This final project extends my midterm analysis of 2024 PM2.5 and weather conditions. The core question is:</p>
+<section id="project" class="level2">
+<h2 class="anchored" data-anchor-id="project">Project</h2>
+<p>This website presents my JSC370 final project on daily PM2.5, weather, and high-pollution prediction across major U.S. metropolitan areas in 2024.</p>
+<p>The project builds on my midterm research question:</p>
 <blockquote class="blockquote">
-<p>How are daily PM2.5 levels associated with temperature, precipitation, wind, pressure, and humidity across major U.S. metropolitan areas in 2024, and can these conditions help predict high-pollution days?</p>
+<p>How are daily PM2.5 levels associated with temperature, precipitation, wind, barometric pressure, and humidity-related conditions across major U.S. metropolitan areas in 2024?</p>
 </blockquote>
-<p>The project uses a merged monitor-day dataset built from EPA AQS PM2.5 records, AQS weather summary files, and NOAA CDO API weather variables. The final analysis moves from descriptive exploration to prediction with Random Forest and XGBoost models.</p>
-<section id="project-snapshot" class="level2">
-<h2 class="anchored" data-anchor-id="project-snapshot">Project Snapshot</h2>
-<div id="6b0c54c3" class="cell" data-execution_count="2">
-<div class="cell-output cell-output-display cell-output-markdown">
-<table class="caption-top table table-sm table-striped small">
-<thead>
-<tr class="header">
-<th style="text-align: left;">Measure</th>
-<th style="text-align: left;">Value</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td style="text-align: left;">Monitor-day observations</td>
-<td style="text-align: left;">13,057</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">Unique monitors</td>
-<td style="text-align: left;">83</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">Metropolitan areas</td>
-<td style="text-align: left;">21</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">Date range</td>
-<td style="text-align: left;">2024-01-01 to 2024-12-31</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">Mean daily PM2.5</td>
-<td style="text-align: left;">8.84 ug/m3</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">High PM2.5 monitor-days (&gt;35 ug/m3)</td>
-<td style="text-align: left;">74 (0.57%)</td>
-</tr>
-</tbody>
-</table>
-</div>
-</div>
+<p>For the final project, I extend that descriptive analysis into predictive modeling. I use Random Forest and XGBoost models to predict daily PM2.5 concentrations and classify whether a monitor-day exceeds 35 ug/m3.</p>
 </section>
-<section id="what-this-site-contains" class="level2">
-<h2 class="anchored" data-anchor-id="what-this-site-contains">What This Site Contains</h2>
+<section id="data-sources" class="level2">
+<h2 class="anchored" data-anchor-id="data-sources">Data Sources</h2>
+<p>The analysis uses a saved merged file, <code>pm25_weather_local_2024_2.0.csv</code>, created from:</p>
 <ul>
-<li><a href="visualizations.html">Interactive visualizations</a>: three Plotly figures for the Homework 5 requirement, including a monitor map, monthly/seasonal PM2.5 distributions, and a weather relationship explorer.</li>
-<li><a href="report.html">Written report</a>: the full reproducible report with hidden code, cleaned tables, model comparisons, and interpretation.</li>
-<li><a href="report.pdf">Download the report</a>: PDF version of the written report.</li>
-<li><a href="https://github.com/NKwyk/JSC370-project">GitHub repository</a>: source files, data, and website code(The final project code is under the folder final project).</li>
+<li>EPA AQS daily PM2.5 monitor data.</li>
+<li>EPA AQS daily wind, pressure, relative humidity, and dew point summaries.</li>
+<li>NOAA Climate Data Online API variables for maximum temperature, minimum temperature, and precipitation.</li>
 </ul>
+<p>The modeling unit is a monitor-day observation. Geographic identifiers, weather measurements, and temporal variables are used as predictors.</p>
 </section>
-<section id="main-findings" class="level2">
-<h2 class="anchored" data-anchor-id="main-findings">Main Findings</h2>
-<p>PM2.5 levels vary strongly across space and season. The highest average concentrations in this dataset appear in Southern California and several large industrial or warm-climate metropolitan areas, while summer and winter show the clearest seasonal elevation. The July peaks are consistent with the wildfire-smoke interpretation discussed in the midterm, although this report treats wildfire influence as contextual evidence rather than a directly modeled variable.</p>
-<p>The predictive models confirm that PM2.5 is not driven by one weather variable alone. Spatial location, time of year, temperature, wind, pressure, precipitation, and humidity all contribute. For continuous PM2.5 prediction, Random Forest and XGBoost are compared using RMSE, MAE, and R-squared. For high PM2.5 classification, the report focuses on recall, precision, F1, ROC-AUC, and PR-AUC because high-pollution days above 35 ug/m3 are rare.</p>
+<section id="reproducibility-notes" class="level2">
+<h2 class="anchored" data-anchor-id="reproducibility-notes">Reproducibility Notes</h2>
+<p>All source files are in the <code>final_project</code> directory:</p>
+<ul>
+<li><code>index.qmd</code> builds the project homepage.</li>
+<li><code>visualizations.qmd</code> builds the interactive Plotly figures.</li>
+<li><code>report.qmd</code> builds both the HTML report and the downloadable PDF report.</li>
+<li><code>_quarto.yml</code> defines the Quarto website structure.</li>
+<li><code>pm25_weather_local_2024_2.0.csv</code> is the analysis dataset.</li>
+</ul>
+<p>The project repository is available here: <a href="https://github.com/NKwyk/JSC370-project">https://github.com/NKwyk/JSC370-project</a>.</p>
+<p>The final project repository only is available here: <a href="https://github.com/NKwyk/JSC370-project/tree/main/final_project">https://github.com/NKwyk/JSC370-project/tree/main/final_project</a>.</p>
 </section>
-<section id="reproducibility" class="level2">
-<h2 class="anchored" data-anchor-id="reproducibility">Reproducibility</h2>
-<p>The website is rendered with Quarto and Python. All code chunks are hidden in the report output, but the source <code>.qmd</code> files contain the full analysis workflow. The main data file is <code>pm25_weather_local_2024_2.0.csv</code> in this project directory.</p>
+<section id="rendering" class="level2">
+<h2 class="anchored" data-anchor-id="rendering">Rendering</h2>
+<p>To reproduce the site locally, run this command from the <code>final_project</code> directory:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The rendered website includes <code>index.html</code>, <code>visualizations.html</code>, <code>report.html</code>, <code>about.html</code>, and <code>report.pdf</code>.</p>
 
 
 </section>
@@ -312,7 +321,7 @@ ul.task-list li input[type="checkbox"] {
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/NKwyk\.github\.io\/JSC370-project\/");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }
