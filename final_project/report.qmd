@@ -613,7 +613,7 @@ This project shows that daily PM2.5 variation is shaped by a combination of loca
 
 The modeling results support the idea that PM2.5 prediction requires both environmental and contextual information. Weather variables such as temperature, precipitation, wind, humidity, and pressure contribute to prediction, but location and time variables are also important. This suggests that PM2.5 is not driven by one single weather factor. Instead, pollution levels reflect interactions between geography, seasonality, and meteorological conditions.
 
-For continuous PM2.5 prediction, the Random Forest model performs better than XGBoost on the test set, with lower prediction error and higher R-squared. For high-PM2.5 classification, XGBoost is more useful as a warning-oriented model because it identifies more rare high-pollution events. Overall, the project shows that tree-based machine learning models can provide useful predictive summaries of PM2.5 patterns, but the results should be interpreted as predictive associations rather than causal explanations.
+For continuous PM2.5 prediction, the XGBoost model performs better than Random Forest on the test set, with lower prediction error and higher R-squared. For high-PM2.5 classification, Random Forest is more useful as a warning-oriented model because it achieves stronger recall and F1 for the rare high-pollution class while keeping false positives relatively limited. Overall, the project shows that tree-based machine learning models can provide useful predictive summaries of PM2.5 patterns, but the results should be interpreted as predictive associations rather than causal explanations.
 
 ## Limitations
 
